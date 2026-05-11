@@ -197,6 +197,18 @@ $script:CheckCatalog = @{
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/deploy-azure-ad-joined-vm'
     }
 
+    DefenderForCloudCoverage = [PSCustomObject]@{
+        Name        = 'Defender for Cloud Coverage'
+        Remediation = 'Enable Microsoft Defender for Cloud at the Standard tier for at least Servers (VirtualMachines plan) and Storage on the assessed subscription. Defender for Servers gives you vulnerability assessment, file integrity monitoring, just-in-time VM access, and adaptive application controls - none of which fire in Free tier. Defender for Storage adds malware scanning and sensitive data discovery for FSLogix profile shares and app attach storage. Enable via the Azure portal (Defender for Cloud > Environment settings > <subscription> > Defender plans) or with Set-AzSecurityPricing -Name VirtualMachines -PricingTier Standard. Cost is per resource per month - review the pricing page before enabling at scale.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/defender-for-cloud/defender-for-cloud-introduction'
+    }
+
+    AvdPrivateLink = [PSCustomObject]@{
+        Name        = 'AVD Private Link'
+        Remediation = 'For each flagged host pool, either disable public network access (Update-AzWvdHostPool -PublicNetworkAccess Disabled) or deploy a private endpoint that targets the host pool resource. Private Link replaces the public AVD control plane endpoint with a private IP inside your VNet, which removes the public attack surface for connection brokering and feed enumeration. Public network access is the default on host pools created before the Private Link GA, so legacy deployments commonly fall foul of this check even though their session hosts themselves are not public. Pairs naturally with workspace and feed Private Link endpoints for a fully private user experience.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/private-link-overview'
+    }
+
     # ---- Operational Excellence ----
     DiagnosticSettings = [PSCustomObject]@{
         Name        = 'Diagnostic Settings'
@@ -573,6 +585,16 @@ function Initialize-DryRunData {
     $m = Get-Check 'EntraIdJoin'
     Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
         -Finding '3 of 5 session host VM(s) appear to be hybrid-joined or domain-joined only (AADLoginForWindows extension not detected).' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    $m = Get-Check 'DefenderForCloudCoverage'
+    Add-CheckResult -Category Security -CheckName $m.Name -Status Warning -Score 60 `
+        -Finding 'Defender for Cloud coverage is incomplete on this subscription. Free / unconfigured plans: StorageAccounts: Free.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    $m = Get-Check 'AvdPrivateLink'
+    Add-CheckResult -Category Security -CheckName $m.Name -Status Warning -Score 60 `
+        -Finding '2 of 5 host pool(s) are exposed to public network access without a private endpoint (60% covered). Exposed: hp-prod-pooled-01 (PublicNetworkAccess: Enabled); hp-dev-pooled-01 (PublicNetworkAccess: Enabled).' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     Write-Section 'Operational Excellence'
@@ -1448,6 +1470,119 @@ function Invoke-SecurityChecks {
             Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
                 -Finding ("{0} of {1} session host VM(s) appear to be hybrid-joined or domain-joined only (AADLoginForWindows extension not detected). Entra ID join is the recommended approach for new AVD deployments." -f $other, $script:allVMs.Count) `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # Check S5: Defender for Cloud Coverage
+    # WAF singles out VirtualMachines as the must-have plan (Defender for
+    # Servers covers vuln assessment, FIM, JIT, adaptive app controls).
+    # StorageAccounts is "ideally too" - matters for FSLogix profile shares
+    # and app attach storage. Score = (VM standard ? 60 : 0) + (Storage standard ? 40 : 0).
+    # VM weighted higher because it is the WAF requirement; storage is the bonus.
+    $m = Get-Check 'DefenderForCloudCoverage'
+    if ($script:SecurityPricingFetchFailed) {
+        Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Unable to read Defender for Cloud pricing - the current identity lacks Microsoft.Security/pricings/read on the subscription.' `
+            -Remediation 'Grant Security Reader (or Reader on the Microsoft.Security namespace) on the subscription and re-run.' `
+            -LearnMore $m.LearnMore
+    } elseif ($script:securityPricings.Count -eq 0) {
+        Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Defender for Cloud pricing endpoint returned no entries. The subscription may have a non-standard configuration; verify Defender for Cloud is initialised.' `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } else {
+        $vmPricing = @($script:securityPricings | Where-Object { $_.Name -eq 'VirtualMachines' }) | Select-Object -First 1
+        $storagePricing = @($script:securityPricings | Where-Object { $_.Name -eq 'StorageAccounts' }) | Select-Object -First 1
+        $vmStandard      = $vmPricing      -and $vmPricing.PricingTier      -ne 'Free'
+        $storageStandard = $storagePricing -and $storagePricing.PricingTier -ne 'Free'
+        $score = (& { if ($vmStandard) { 60 } else { 0 } }) + (& { if ($storageStandard) { 40 } else { 0 } })
+
+        $vmTier      = if ($vmPricing)      { $vmPricing.PricingTier }      else { 'not configured' }
+        $storageTier = if ($storagePricing) { $storagePricing.PricingTier } else { 'not configured' }
+
+        if ($vmStandard -and $storageStandard) {
+            Add-CheckResult -Category Security -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("Defender for Servers and Defender for Storage are both on Standard tier (VirtualMachines: {0}, StorageAccounts: {1})." -f $vmTier, $storageTier) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $gaps = [System.Collections.Generic.List[string]]::new()
+            if (-not $vmStandard)      { $gaps.Add(('VirtualMachines: {0}'  -f $vmTier)) }
+            if (-not $storageStandard) { $gaps.Add(('StorageAccounts: {0}' -f $storageTier)) }
+            $status = if (-not $vmStandard) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Security -CheckName $m.Name -Status $status -Score $score `
+                -Finding ("Defender for Cloud coverage is incomplete on this subscription. Free / unconfigured plans: {0}." -f ($gaps -join '; ')) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # Check S6: AVD Private Link
+    # Per host pool: PublicNetworkAccess = Disabled is a clean pass.
+    # If Enabled (or one of the partial states), the host pool must be
+    # fronted by a Private Endpoint - matched by walking PE connections
+    # and looking for one whose PrivateLinkServiceId points at the host
+    # pool. AVD's PE target ID is the host pool's ARM ID, sometimes with
+    # a /connection/<name> suffix, so we use a starts-with match.
+    # Older Az.DesktopVirtualization versions do not surface
+    # PublicNetworkAccess - degrade to Info in that case so the check
+    # does not produce false warnings.
+    $m = Get-Check 'AvdPrivateLink'
+    if ($script:PrivateEndpointFetchFailed) {
+        Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Unable to enumerate private endpoints - the current identity lacks Microsoft.Network/privateEndpoints/read on the subscription.' `
+            -Remediation 'Grant Reader on the subscription (or on each resource group hosting AVD private endpoints) and re-run.' `
+            -LearnMore $m.LearnMore
+    } else {
+        $hasPnaProperty = $script:allHostPools | Where-Object { $null -ne $_.PSObject.Properties['PublicNetworkAccess'] } | Select-Object -First 1
+        if (-not $hasPnaProperty) {
+            Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
+                -Finding 'The installed Az.DesktopVirtualization module does not expose the PublicNetworkAccess property on host pools. Update to Az.DesktopVirtualization 4.0 or later to enable this check.' `
+                -Remediation 'Run: Update-Module Az.DesktopVirtualization -Force, then re-run AVD-Assess.' `
+                -LearnMore $m.LearnMore
+        } else {
+            $exposed = [System.Collections.Generic.List[string]]::new()
+            $covered = 0
+            $scored  = 0
+
+            foreach ($hp in $script:allHostPools) {
+                $pna = $hp.PublicNetworkAccess
+                if (-not $pna) { continue }   # property absent on this object
+                $scored++
+                if ($pna -eq 'Disabled') { $covered++; continue }
+
+                $matchingPe = @($script:privateEndpoints | Where-Object {
+                    $found = $false
+                    foreach ($conn in @($_.PrivateLinkServiceConnections)) {
+                        if ($conn.PrivateLinkServiceId -and $conn.PrivateLinkServiceId.StartsWith($hp.Id, [System.StringComparison]::OrdinalIgnoreCase)) {
+                            $found = $true
+                            break
+                        }
+                    }
+                    $found
+                })
+
+                if ($matchingPe.Count -gt 0) {
+                    $covered++
+                } else {
+                    $exposed.Add(('{0} (PublicNetworkAccess: {1})' -f $hp.Name, $pna))
+                }
+            }
+
+            if ($scored -eq 0) {
+                Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
+                    -Finding 'None of the assessed host pools expose a PublicNetworkAccess value. Update Az.DesktopVirtualization or check that the host pools were created with a Private Link-capable API version.' `
+                    -Remediation $m.Remediation -LearnMore $m.LearnMore
+            } elseif ($exposed.Count -eq 0) {
+                Add-CheckResult -Category Security -CheckName $m.Name -Status Pass -Score 100 `
+                    -Finding ("All {0} host pool(s) are either Private Link fronted or have public network access disabled." -f $scored) `
+                    -Remediation '' -LearnMore $m.LearnMore
+            } else {
+                $pct = [int][math]::Round(($covered / $scored) * 100)
+                $shown = ($exposed | Select-Object -First 5) -join '; '
+                $more  = if ($exposed.Count -gt 5) { (" (+{0} more)" -f ($exposed.Count - 5)) } else { '' }
+                $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+                Add-CheckResult -Category Security -CheckName $m.Name -Status $status -Score $pct `
+                    -Finding ("{0} of {1} host pool(s) are exposed to public network access without a private endpoint ({2}% covered). Exposed: {3}{4}." -f $exposed.Count, $scored, $pct, $shown, $more) `
+                    -Remediation $m.Remediation -LearnMore $m.LearnMore
+            }
         }
     }
 }
