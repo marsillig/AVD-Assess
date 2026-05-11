@@ -54,7 +54,7 @@
     Website  : https://modern-euc.com
     Project  : https://github.com/waynebellows/AVD-Assess
     License  : MIT
-    Version  : 1.0.0
+    Version  : 2.0.0-alpha.1
 #>
 
 [CmdletBinding()]
@@ -71,7 +71,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '1.0.0'
+$script:ToolVersion = '2.0.0-alpha.1'
 $script:ProjectUrl  = 'https://github.com/waynebellows/AVD-Assess'
 $script:WebsiteUrl  = 'https://modern-euc.com'
 $script:RequiredModules = @(
