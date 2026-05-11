@@ -221,6 +221,13 @@ $script:CheckCatalog = @{
         Remediation = 'BreadthFirst is recommended when user experience is the top priority - each user gets more dedicated resources. DepthFirst is recommended when cost is the priority and the workload is not resource-intensive - it allows more VMs to be fully shut down during off-peak hours. Review your choice against your scaling plan configuration: DepthFirst works best with aggressive scale-in, BreadthFirst pairs well with reserved instances on a core set of always-on hosts.'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/configure-host-pool-load-balancing'
     }
+
+    # ---- Performance Efficiency ----
+    AcceleratedNetworking = [PSCustomObject]@{
+        Name        = 'Accelerated Networking'
+        Remediation = 'Enable Accelerated Networking on every session host NIC. For VMs that support it (most Dsv3 / Dsv4 / Dsv5 / Esv4 / Esv5 sizes and above), this offloads packet processing to the host SmartNIC and typically halves end-to-end network latency. Stop the VM, run Set-AzNetworkInterface with -EnableAcceleratedNetworking $true on the NIC, then start the VM. Bake it into your deployment templates so new hosts are correctly configured from day one. If a VM SKU does not support Accelerated Networking, consider resizing to a modern SKU as part of your next refresh cycle.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-network/accelerated-networking-overview'
+    }
 }
 
 function Get-Check {
@@ -241,7 +248,7 @@ $script:Checks = [System.Collections.Generic.List[object]]::new()
 
 function Add-CheckResult {
     param(
-        [Parameter(Mandatory)][ValidateSet('Cost','Reliability','Security','Operations')]
+        [Parameter(Mandatory)][ValidateSet('Cost','Reliability','Security','Operations','Performance')]
         [string]$Category,
         [Parameter(Mandatory)][string]$CheckName,
         [Parameter(Mandatory)][ValidateSet('Pass','Warning','Fail','Info')]
@@ -547,6 +554,12 @@ function Initialize-DryRunData {
     $m = Get-Check 'LoadBalancingAlgorithm'
     Add-CheckResult -Category Operations -CheckName $m.Name -Status Pass -Score 100 `
         -Finding '3 pool(s) use BreadthFirst (performance-optimised), 1 pool(s) use DepthFirst (cost-optimised).' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    Write-Section 'Performance Efficiency'
+    $m = Get-Check 'AcceleratedNetworking'
+    Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 60 `
+        -Finding '3 of 5 session host NIC(s) have Accelerated Networking enabled (60%). Disabled on: avd-prod-vm-04, avd-prod-vm-05.' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 }
 
@@ -1355,6 +1368,56 @@ function Invoke-OperationsChecks {
 }
 
 # ==============================================================================
+# CHECKS: PERFORMANCE EFFICIENCY
+# ==============================================================================
+
+function Invoke-PerformanceChecks {
+    Write-Section 'Performance Efficiency'
+
+    # Check PE1: Accelerated Networking
+    # Pass = 100% of session host NICs have it enabled.
+    # Warning = proportional shortfall (score == % enabled).
+    # Info = no NIC data available (permission denied or no AVD VMs).
+    $m = Get-Check 'AcceleratedNetworking'
+
+    if ($script:NicFetchFailed -or $script:vmNics.Count -eq 0) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'No NIC data available - either the assessed scope has no session host VMs, or the current identity lacks Microsoft.Network/networkInterfaces/read on the session host resource groups.' `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+        return
+    }
+
+    $totalNics    = $script:vmNics.Count
+    $enabledNics  = 0
+    $disabledHosts = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($vm in $script:allVMs) {
+        if (-not $script:vmNics.ContainsKey($vm.Id)) { continue }
+        $nic = $script:vmNics[$vm.Id]
+        if ($nic.EnableAcceleratedNetworking) {
+            $enabledNics++
+        } else {
+            $disabledHosts.Add($vm.Name)
+        }
+    }
+
+    if ($disabledHosts.Count -eq 0) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+            -Finding ("All {0} session host NIC(s) have Accelerated Networking enabled." -f $totalNics) `
+            -Remediation '' -LearnMore $m.LearnMore
+    } else {
+        $pct = [int][math]::Round(($enabledNics / $totalNics) * 100)
+        # Show up to 5 affected hosts inline; summarise the rest.
+        $shown = ($disabledHosts | Select-Object -First 5) -join ', '
+        $more  = if ($disabledHosts.Count -gt 5) { (" (+{0} more)" -f ($disabledHosts.Count - 5)) } else { '' }
+        $status = if ($pct -eq 0) { 'Fail' } else { 'Warning' }
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
+            -Finding ("{0} of {1} session host NIC(s) have Accelerated Networking enabled ({2}%). Disabled on: {3}{4}." -f $enabledNics, $totalNics, $pct, $shown, $more) `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    }
+}
+
+# ==============================================================================
 # SCORING
 # ==============================================================================
 
@@ -1367,7 +1430,7 @@ function Get-CategoryScore {
 }
 
 function Get-OverallScore {
-    $cats = @('Cost','Reliability','Security','Operations')
+    $cats = @('Cost','Reliability','Security','Operations','Performance')
     $scores = $cats | ForEach-Object { Get-CategoryScore $_ }
     return [int][math]::Round(($scores | Measure-Object -Average).Average)
 }
@@ -1449,6 +1512,7 @@ function New-HtmlReport {
     $cardRel    = New-CategoryCardHtml -Category 'Reliability' -DisplayName 'Reliability & Resilience'
     $cardSec    = New-CategoryCardHtml -Category 'Security'    -DisplayName 'Security Posture'
     $cardOps    = New-CategoryCardHtml -Category 'Operations'  -DisplayName 'Operational Excellence'
+    $cardPerf   = New-CategoryCardHtml -Category 'Performance' -DisplayName 'Performance Efficiency'
 
     $css = @'
 :root { color-scheme: dark; }
@@ -1541,10 +1605,23 @@ header.hero {
   font-weight: 500;
   word-break: break-all;
 }
+/* 3+2 grid for the 5 WAF categories. Top row: Cost / Reliability / Security
+   each spans 2 of 6 columns. Bottom row: Operations / Performance each spans
+   3 of 6 columns so they share the full width evenly. Stacks 2-up below
+   1100px and 1-up below 760px. */
 .categories {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+  grid-template-columns: repeat(6, 1fr);
   gap: 20px;
+}
+.categories > .category-card { grid-column: span 2; }
+.categories > .category-card:nth-child(4),
+.categories > .category-card:nth-child(5) { grid-column: span 3; }
+@media (max-width: 1100px) {
+  .categories { grid-template-columns: repeat(2, 1fr); }
+  .categories > .category-card,
+  .categories > .category-card:nth-child(4),
+  .categories > .category-card:nth-child(5) { grid-column: span 1; }
 }
 .category-card {
   background: #0D2535;
@@ -1665,6 +1742,9 @@ footer a:hover { color: #B3FF00; }
   header.hero { flex-direction: column; align-items: flex-start; }
   .overall { align-self: flex-end; }
   .categories { grid-template-columns: 1fr; }
+  .categories > .category-card,
+  .categories > .category-card:nth-child(4),
+  .categories > .category-card:nth-child(5) { grid-column: span 1; }
 }
 '@
 
@@ -1710,6 +1790,7 @@ footer a:hover { color: #B3FF00; }
     $cardRel
     $cardSec
     $cardOps
+    $cardPerf
   </div>
 
   <footer>
@@ -1746,6 +1827,7 @@ function Invoke-Main {
         Invoke-ReliabilityChecks
         Invoke-SecurityChecks
         Invoke-OperationsChecks
+        Invoke-PerformanceChecks
     }
 
     # Score summary
@@ -1753,6 +1835,7 @@ function Invoke-Main {
     $rel  = Get-CategoryScore 'Reliability'
     $sec  = Get-CategoryScore 'Security'
     $ops  = Get-CategoryScore 'Operations'
+    $perf = Get-CategoryScore 'Performance'
     $overall = Get-OverallScore
 
     Write-Section 'Score Summary'
@@ -1760,6 +1843,7 @@ function Invoke-Main {
     Write-Host ("  Reliability            : {0}/100" -f $rel)     -ForegroundColor White
     Write-Host ("  Security Posture       : {0}/100" -f $sec)     -ForegroundColor White
     Write-Host ("  Operational Excellence : {0}/100" -f $ops)     -ForegroundColor White
+    Write-Host ("  Performance Efficiency : {0}/100" -f $perf)    -ForegroundColor White
     Write-Host ''
     Write-Host ("  Overall Score          : {0}/100" -f $overall) -ForegroundColor Cyan
 
