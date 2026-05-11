@@ -240,6 +240,18 @@ $script:CheckCatalog = @{
         Remediation = 'Plan a refresh of any Gen1 session host VMs to Gen2 images. Gen1 blocks Trusted Launch, Confidential VMs, vTPM, and several Windows 11 features, and indicates the underlying image lineage is stale (Azure has defaulted to Gen2 since 2022). Generation is set at deployment time and cannot be changed in place - the migration path is to deploy fresh session hosts from a Gen2-based image, drain the Gen1 hosts, then retire them. If your image build pipeline still produces Gen1, update the source image SKU to a Gen2 equivalent (most marketplace images now offer a "-g2" variant).'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-machines/generation-2'
     }
+
+    FSLogixRegionColocation = [PSCustomObject]@{
+        Name        = 'FSLogix Region Colocation'
+        Remediation = 'Move the FSLogix profile storage account into the same Azure region as the host pool it serves. Cross-region FSLogix traffic adds 40-80 ms to every OpenFile against the profile container - which means every application launch and Outlook search in the user session takes that hit. Migration path: provision a new storage account in the target region, use AzCopy or Storage Mover to copy profile containers in a maintenance window, repoint the FSLogix VHDLocations registry value, then decommission the old account. If you cannot move the storage, consider deploying a regional session host pool that lives next to the profile data instead.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/well-architected/azure-virtual-desktop/storage'
+    }
+
+    FSLogixProfileRedundancy = [PSCustomObject]@{
+        Name        = 'FSLogix Profile Redundancy'
+        Remediation = 'Move FSLogix profile storage to a zone-redundant SKU: Standard_ZRS, Standard_GZRS, Standard_RAGZRS, or Premium_ZRS. LRS storage takes a full outage when its single AZ has a problem - even if the session host pool itself spans multiple zones, users on LRS profiles get locked out. ZRS replicates synchronously across three AZs in the region for the same use case. For Premium file shares (the recommended FSLogix backend at scale), use Premium_ZRS. SKU changes are non-disruptive on most account types but verify Microsoft Learn for your specific configuration before scheduling.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy'
+    }
 }
 
 function Get-Check {
@@ -526,6 +538,11 @@ function Initialize-DryRunData {
         -Finding 'All pooled host pools are below 85% session capacity utilisation.' `
         -Remediation '' -LearnMore $m.LearnMore
 
+    $m = Get-Check 'FSLogixProfileRedundancy'
+    Add-CheckResult -Category Reliability -CheckName $m.Name -Status Warning -Score 33 `
+        -Finding '2 of 3 FSLogix-linked host pool(s) use non-zone-redundant storage (33% zone-redundant). Non-ZR: hp-prod-pooled-01 (storage stfslogixprod, SKU Standard_LRS); hp-dev-pooled-01 (storage stfslogixdev, SKU Standard_LRS).' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
     Write-Section 'Security Posture'
     $m = Get-Check 'DriveRedirection'
     Add-CheckResult -Category Security -CheckName $m.Name -Status Warning -Score 40 `
@@ -583,6 +600,11 @@ function Initialize-DryRunData {
     Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
         -Finding 'All 5 session host(s) are Gen2 VMs.' `
         -Remediation '' -LearnMore $m.LearnMore
+
+    $m = Get-Check 'FSLogixRegionColocation'
+    Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 67 `
+        -Finding '1 of 3 host pool(s) have FSLogix storage in a different region (67% colocated). Cross-region: hp-dev-pooled-01 (uksouth pool / ukwest storage). Discovery method: Tag: 2, Pattern: 1.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
 }
 
 # ==============================================================================
@@ -1203,6 +1225,57 @@ function Invoke-ReliabilityChecks {
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
+
+    # Check R6: FSLogix Profile Redundancy (zone-redundant storage SKU)
+    # Reuses the discovery data populated in Get-AvdEnvironmentData. ZRS, GZRS,
+    # RA-GZRS, and Premium_ZRS replicate synchronously across three AZs - LRS
+    # and GRS do not. Scoring is per host pool so storage shared across many
+    # pools weights the score correctly.
+    $m = Get-Check 'FSLogixProfileRedundancy'
+    $zrSkus = @('Standard_ZRS','Standard_GZRS','Standard_RAGZRS','Premium_ZRS')
+    $fslogixLinks = [System.Collections.Generic.List[object]]::new()
+    foreach ($hp in $script:allHostPools) {
+        $d = $script:fslogixDiscovery[$hp.Id]
+        if ($d -and $d.StorageAccount) {
+            $fslogixLinks.Add([PSCustomObject]@{
+                HostPool       = $hp
+                StorageAccount = $d.StorageAccount
+                Method         = $d.Method
+            })
+        }
+    }
+
+    if ($script:StorageFetchFailed) {
+        Add-CheckResult -Category Reliability -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Cannot evaluate FSLogix profile redundancy: storage account read access was denied on every resource group containing a host pool.' `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } elseif ($fslogixLinks.Count -eq 0) {
+        Add-CheckResult -Category Reliability -CheckName $m.Name -Status Info -Score 100 `
+            -Finding "FSLogix storage could not be auto-discovered for any host pool. Re-run with -FSLogixStorageAccount <name> to override, tag a host pool with 'FSLogixStorageAccount' = <storage account name>, or ensure the FSLogix storage account name matches the -FSLogixNamePattern (default '*fslogix*')." `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } else {
+        $nonZr = [System.Collections.Generic.List[string]]::new()
+        foreach ($link in $fslogixLinks) {
+            $sku = $link.StorageAccount.Sku.Name
+            if ($zrSkus -notcontains $sku) {
+                $nonZr.Add(('{0} (storage {1}, SKU {2})' -f $link.HostPool.Name, $link.StorageAccount.StorageAccountName, $sku))
+            }
+        }
+        if ($nonZr.Count -eq 0) {
+            Add-CheckResult -Category Reliability -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} discovered FSLogix storage account(s) use a zone-redundant SKU (ZRS / GZRS / RAGZRS / Premium_ZRS)." -f $fslogixLinks.Count) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $ok  = $fslogixLinks.Count - $nonZr.Count
+            $pct = [int][math]::Round(($ok / $fslogixLinks.Count) * 100)
+            $shown = ($nonZr | Select-Object -First 5) -join '; '
+            $more  = if ($nonZr.Count -gt 5) { (" (+{0} more)" -f ($nonZr.Count - 5)) } else { '' }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Reliability -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} FSLogix-linked host pool(s) use non-zone-redundant storage ({2}% zone-redundant). Non-ZR: {3}{4}." -f $nonZr.Count, $fslogixLinks.Count, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
 }
 
 # ==============================================================================
@@ -1545,6 +1618,56 @@ function Invoke-PerformanceChecks {
             $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
             Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
                 -Finding ("{0} of {1} session host(s) are Gen2 VMs ({2}%). Gen1 hosts: {3}{4}." -f $ok, $total, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # Check PE4: FSLogix Region Colocation
+    # Cross-region FSLogix profile traffic adds 40-80ms per OpenFile, which
+    # silently degrades every application launch. The discovery method is
+    # recorded in the finding text so admins can judge how much to trust the
+    # auto-detection - explicit override > tag > name pattern.
+    $m = Get-Check 'FSLogixRegionColocation'
+    $fslogixLinks = [System.Collections.Generic.List[object]]::new()
+    foreach ($hp in $script:allHostPools) {
+        $d = $script:fslogixDiscovery[$hp.Id]
+        if ($d -and $d.StorageAccount) {
+            $fslogixLinks.Add([PSCustomObject]@{
+                HostPool       = $hp
+                StorageAccount = $d.StorageAccount
+                Method         = $d.Method
+            })
+        }
+    }
+
+    if ($script:StorageFetchFailed) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Cannot evaluate FSLogix region colocation: storage account read access was denied on every resource group containing a host pool.' `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } elseif ($fslogixLinks.Count -eq 0) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+            -Finding "FSLogix storage could not be auto-discovered for any host pool. Re-run with -FSLogixStorageAccount <name> to override, tag a host pool with 'FSLogixStorageAccount' = <storage account name>, or ensure the FSLogix storage account name matches the -FSLogixNamePattern (default '*fslogix*')." `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } else {
+        $crossRegion = [System.Collections.Generic.List[string]]::new()
+        foreach ($link in $fslogixLinks) {
+            if ($link.HostPool.Location -ne $link.StorageAccount.Location) {
+                $crossRegion.Add(('{0} ({1} pool / {2} storage)' -f $link.HostPool.Name, $link.HostPool.Location, $link.StorageAccount.Location))
+            }
+        }
+        $methodSummary = ($fslogixLinks | Group-Object Method | ForEach-Object { ('{0}: {1}' -f $_.Name, $_.Count) }) -join ', '
+        if ($crossRegion.Count -eq 0) {
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} discovered FSLogix storage account(s) are colocated with their host pool. Discovery method: {1}." -f $fslogixLinks.Count, $methodSummary) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $ok  = $fslogixLinks.Count - $crossRegion.Count
+            $pct = [int][math]::Round(($ok / $fslogixLinks.Count) * 100)
+            $shown = ($crossRegion | Select-Object -First 5) -join '; '
+            $more  = if ($crossRegion.Count -gt 5) { (" (+{0} more)" -f ($crossRegion.Count - 5)) } else { '' }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} host pool(s) have FSLogix storage in a different region ({2}% colocated). Cross-region: {3}{4}. Discovery method: {5}." -f $crossRegion.Count, $fslogixLinks.Count, $pct, $shown, $more, $methodSummary) `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
