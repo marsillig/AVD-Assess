@@ -247,6 +247,12 @@ $script:CheckCatalog = @{
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/well-architected/azure-virtual-desktop/storage'
     }
 
+    AvailabilityZoneDistribution = [PSCustomObject]@{
+        Name        = 'Availability Zone Distribution'
+        Remediation = 'Deploy multi-session host pools with session hosts spread across at least two availability zones. New deployments: select explicit zones (1, 2, 3) for each VM in the pool, or use a Virtual Machine Scale Set with the Spread placement group policy. Existing single-zone pools: provision additional hosts in alternate zones, drain users from the original zone, then retire the single-zone hosts. The host pool itself does not have a zone property - zone distribution is a property of the underlying VMs. Some Azure regions do not yet support availability zones - if you are in one of those regions, plan to migrate the host pool to a zone-capable region as part of your DR strategy.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/reliability/availability-zones-overview'
+    }
+
     FSLogixProfileRedundancy = [PSCustomObject]@{
         Name        = 'FSLogix Profile Redundancy'
         Remediation = 'Move FSLogix profile storage to a zone-redundant SKU: Standard_ZRS, Standard_GZRS, Standard_RAGZRS, or Premium_ZRS. LRS storage takes a full outage when its single AZ has a problem - even if the session host pool itself spans multiple zones, users on LRS profiles get locked out. ZRS replicates synchronously across three AZs in the region for the same use case. For Premium file shares (the recommended FSLogix backend at scale), use Premium_ZRS. SKU changes are non-disruptive on most account types but verify Microsoft Learn for your specific configuration before scheduling.'
@@ -541,6 +547,11 @@ function Initialize-DryRunData {
     $m = Get-Check 'FSLogixProfileRedundancy'
     Add-CheckResult -Category Reliability -CheckName $m.Name -Status Warning -Score 33 `
         -Finding '2 of 3 FSLogix-linked host pool(s) use non-zone-redundant storage (33% zone-redundant). Non-ZR: hp-prod-pooled-01 (storage stfslogixprod, SKU Standard_LRS); hp-dev-pooled-01 (storage stfslogixdev, SKU Standard_LRS).' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    $m = Get-Check 'AvailabilityZoneDistribution'
+    Add-CheckResult -Category Reliability -CheckName $m.Name -Status Warning -Score 50 `
+        -Finding '1 of 2 multi-host pool(s) span >=2 availability zones (50%). Single-AZ pools: hp-prod-pooled-02 (all in zone 1).' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     Write-Section 'Security Posture'
@@ -1273,6 +1284,83 @@ function Invoke-ReliabilityChecks {
             $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
             Add-CheckResult -Category Reliability -CheckName $m.Name -Status $status -Score $pct `
                 -Finding ("{0} of {1} FSLogix-linked host pool(s) use non-zone-redundant storage ({2}% zone-redundant). Non-ZR: {3}{4}." -f $nonZr.Count, $fslogixLinks.Count, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # Check R5: Availability Zone Distribution
+    # Per pool: count distinct $vm.Zones values across the pool's VMs.
+    # >=2 distinct zones = zone-distributed (Pass-worthy).
+    # 1 distinct zone   = single-AZ risk (Warning-worthy).
+    # 0 zone info       = either region does not support AZs, or VMs were not
+    #                     deployed with explicit zone choice. Report as Info
+    #                     context and exclude from scoring.
+    # Only applies to pooled host pools with >=2 session hosts - single-host
+    # pools cannot be zone-distributed by definition.
+    $m = Get-Check 'AvailabilityZoneDistribution'
+    $vmById = @{}
+    foreach ($vm in $script:allVMs) { $vmById[$vm.Id] = $vm }
+
+    if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
+        Add-CheckResult -Category Reliability -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Cannot evaluate availability zone distribution: no VM data available.' `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } else {
+        $singleAz = [System.Collections.Generic.List[string]]::new()
+        $noZoneInfo = [System.Collections.Generic.List[string]]::new()
+        $distributed = 0
+        $scorablePools = 0
+
+        foreach ($hp in $script:pooledHostPools) {
+            $hostsInPool = @($script:allSessionHosts | Where-Object { $_._HostPoolResourceId -eq $hp.Id })
+            if ($hostsInPool.Count -lt 2) { continue }
+
+            $zones = @()
+            foreach ($sh in $hostsInPool) {
+                $vm = $vmById[$sh.ResourceId]
+                if ($vm -and $vm.Zones -and $vm.Zones.Count -gt 0 -and $vm.Zones[0]) {
+                    $zones += $vm.Zones[0]
+                }
+            }
+            $distinctZones = @($zones | Select-Object -Unique)
+
+            if ($distinctZones.Count -eq 0) {
+                $noZoneInfo.Add(('{0} ({1} host(s))' -f $hp.Name, $hostsInPool.Count))
+            } elseif ($distinctZones.Count -eq 1) {
+                $singleAz.Add(('{0} (all in zone {1})' -f $hp.Name, $distinctZones[0]))
+                $scorablePools++
+            } else {
+                $distributed++
+                $scorablePools++
+            }
+        }
+
+        if ($scorablePools -eq 0 -and $noZoneInfo.Count -eq 0) {
+            Add-CheckResult -Category Reliability -CheckName $m.Name -Status Info -Score 100 `
+                -Finding 'No multi-host pooled host pools found. Availability zone distribution applies to pooled host pools with at least 2 session hosts.' `
+                -Remediation 'No action required.' -LearnMore $m.LearnMore
+        } elseif ($scorablePools -eq 0) {
+            # All eligible pools have no zone info - either non-AZ region or
+            # non-zonal deployment. Either way, report as Info because we
+            # cannot tell which without a region capabilities lookup.
+            $shown = ($noZoneInfo | Select-Object -First 5) -join '; '
+            $more  = if ($noZoneInfo.Count -gt 5) { (" (+{0} more)" -f ($noZoneInfo.Count - 5)) } else { '' }
+            Add-CheckResult -Category Reliability -CheckName $m.Name -Status Info -Score 100 `
+                -Finding ("{0} multi-host pool(s) have no zone information on their VMs. Either the deployment region does not support availability zones, or the VMs were deployed without an explicit zone choice. Pools: {1}{2}." -f $noZoneInfo.Count, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        } elseif ($singleAz.Count -eq 0) {
+            $tail = if ($noZoneInfo.Count -gt 0) { (" {0} pool(s) had no zone info and were excluded from scoring." -f $noZoneInfo.Count) } else { '' }
+            Add-CheckResult -Category Reliability -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} multi-host pooled host pool(s) span at least 2 availability zones.{1}" -f $distributed, $tail) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $pct = [int][math]::Round(($distributed / $scorablePools) * 100)
+            $shown = ($singleAz | Select-Object -First 5) -join '; '
+            $more  = if ($singleAz.Count -gt 5) { (" (+{0} more)" -f ($singleAz.Count - 5)) } else { '' }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            $tail   = if ($noZoneInfo.Count -gt 0) { (" {0} additional pool(s) had no zone info and were excluded from scoring." -f $noZoneInfo.Count) } else { '' }
+            Add-CheckResult -Category Reliability -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} multi-host pool(s) span >=2 availability zones ({2}%). Single-AZ pools: {3}{4}.{5}" -f $distributed, $scorablePools, $pct, $shown, $more, $tail) `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
