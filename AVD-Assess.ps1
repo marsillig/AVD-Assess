@@ -36,6 +36,23 @@
     Generate a report using synthetic data - no Azure calls are made. Used for
     HTML layout verification and for contributors testing UI changes.
 
+.PARAMETER FSLogixStorageAccount
+    Optional: name of the storage account hosting FSLogix profile containers.
+    If supplied, this overrides tag-based and name-pattern auto-discovery for
+    every host pool. Use for one-off runs against environments where the
+    FSLogix storage is not tagged.
+
+.PARAMETER FSLogixTagName
+    Host pool tag key that names the FSLogix storage account. Defaults to
+    'FSLogixStorageAccount'. AVD-Assess proposes this as a community
+    convention - no Microsoft-blessed standard exists.
+
+.PARAMETER FSLogixNamePattern
+    Wildcard pattern used to identify FSLogix storage accounts by name when
+    neither -FSLogixStorageAccount nor a tag match is found. Defaults to
+    '*fslogix*' (case-insensitive). Set to an empty string to disable
+    name-pattern discovery.
+
 .EXAMPLE
     .\AVD-Assess.ps1
     Run against all host pools in the current Az context.
@@ -66,7 +83,10 @@ param(
     [string]$ResourceGroupName,
     [switch]$UseExistingConnection,
     [switch]$OpenReport,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$FSLogixStorageAccount,
+    [string]$FSLogixTagName    = 'FSLogixStorageAccount',
+    [string]$FSLogixNamePattern = '*fslogix*'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,7 +99,10 @@ $script:RequiredModules = @(
     'Az.DesktopVirtualization',
     'Az.Compute',
     'Az.Monitor',
-    'Az.Resources'
+    'Az.Resources',
+    'Az.Network',
+    'Az.Storage',
+    'Az.Security'
 )
 
 # ==============================================================================
@@ -422,6 +445,22 @@ function Initialize-DryRunData {
     $script:ScalingPlanCount = 3
     $script:VmCount          = 47
 
+    # v2 data sources - empty initialisations so PE check functions can read
+    # them without null-ref errors. Real synthetic values get populated by the
+    # PE check PRs that introduce each new check.
+    $script:vmNics            = @{}
+    $script:vmOsDisks         = @{}
+    $script:fslogixDiscovery  = @{}
+    $script:securityPricings  = @()
+    $script:privateEndpoints  = @()
+    $script:activityLogAlerts = @()
+    $script:NicFetchFailed             = $false
+    $script:DiskFetchFailed            = $false
+    $script:StorageFetchFailed         = $false
+    $script:SecurityPricingFetchFailed = $false
+    $script:PrivateEndpointFetchFailed = $false
+    $script:ActivityAlertFetchFailed   = $false
+
     # Each entry below seeds one synthetic check result. Name / Remediation /
     # LearnMore come from $script:CheckCatalog so the dry-run report stays in
     # lock-step with the canonical text used by the real check functions.
@@ -564,9 +603,21 @@ function Get-AvdEnvironmentData {
     $script:allVMs            = @()
     $script:diagnosticSettings = @{}
     $script:hostPoolTags      = @{}
+    $script:vmNics                  = @{}
+    $script:vmOsDisks               = @{}
+    $script:fslogixDiscovery        = @{}
+    $script:securityPricings        = @()
+    $script:privateEndpoints        = @()
+    $script:activityLogAlerts       = @()
     $script:VmFetchFailed     = $false
     $script:DiagFetchFailed   = $false
     $script:TagFetchFailed    = $false
+    $script:NicFetchFailed            = $false
+    $script:DiskFetchFailed           = $false
+    $script:StorageFetchFailed        = $false
+    $script:SecurityPricingFetchFailed = $false
+    $script:PrivateEndpointFetchFailed = $false
+    $script:ActivityAlertFetchFailed   = $false
 
     # Host pools
     try {
@@ -720,6 +771,199 @@ function Get-AvdEnvironmentData {
         Write-Host 'Permission denied (Tag check will return Info)' -ForegroundColor Yellow
     } else {
         Write-Host 'Done' -ForegroundColor Green
+    }
+
+    # --------------------------------------------------------------------------
+    # v2 data sources (Performance Efficiency + new checks across pillars)
+    # Each fetch is additive and degrades only its dependent checks to Info on
+    # failure - existing v1 checks never read these collections.
+    # --------------------------------------------------------------------------
+
+    # NICs (PE1: Accelerated Networking)
+    Write-Host '  Fetching NICs...                 ' -NoNewline
+    $nicOk = 0
+    if ($script:allVMs.Count -gt 0) {
+        foreach ($vm in $script:allVMs) {
+            $nicRef = $null
+            if ($vm.NetworkProfile -and $vm.NetworkProfile.NetworkInterfaces) {
+                $nicRef = @($vm.NetworkProfile.NetworkInterfaces)[0]
+            }
+            if (-not $nicRef -or -not $nicRef.Id) { continue }
+            try {
+                $nic = Invoke-WithRetry -OperationName "Get-AzNetworkInterface ($($vm.Name))" -ScriptBlock {
+                    Get-AzNetworkInterface -ResourceId $nicRef.Id -ErrorAction Stop
+                }
+                if ($nic) {
+                    $script:vmNics[$vm.Id] = $nic
+                    $nicOk++
+                }
+            } catch {
+                Write-Verbose "NIC fetch failed for $($vm.Name): $($_.Exception.Message)"
+            }
+        }
+    }
+    if ($script:allVMs.Count -gt 0 -and $nicOk -eq 0) {
+        $script:NicFetchFailed = $true
+        Write-Host 'Permission denied (Accelerated Networking check will return Info)' -ForegroundColor Yellow
+    } else {
+        Write-Host ("Found {0} NIC(s)" -f $nicOk) -ForegroundColor Green
+    }
+
+    # OS disks (PE2: disk SKU; PE3: VM generation)
+    Write-Host '  Fetching OS disks...             ' -NoNewline
+    $diskOk = 0
+    if ($script:allVMs.Count -gt 0) {
+        foreach ($vm in $script:allVMs) {
+            $diskId = $null
+            if ($vm.StorageProfile -and $vm.StorageProfile.OsDisk -and $vm.StorageProfile.OsDisk.ManagedDisk) {
+                $diskId = $vm.StorageProfile.OsDisk.ManagedDisk.Id
+            }
+            if (-not $diskId) { continue }
+            try {
+                $disk = Invoke-WithRetry -OperationName "Get-AzDisk ($($vm.Name))" -ScriptBlock {
+                    Get-AzDisk -ResourceId $diskId -ErrorAction Stop
+                }
+                if ($disk) {
+                    $script:vmOsDisks[$vm.Id] = $disk
+                    $diskOk++
+                }
+            } catch {
+                Write-Verbose "OS disk fetch failed for $($vm.Name): $($_.Exception.Message)"
+            }
+        }
+    }
+    if ($script:allVMs.Count -gt 0 -and $diskOk -eq 0) {
+        $script:DiskFetchFailed = $true
+        Write-Host 'Permission denied (Disk SKU / Gen2 checks will return Info)' -ForegroundColor Yellow
+    } else {
+        Write-Host ("Found {0} disk(s)" -f $diskOk) -ForegroundColor Green
+    }
+
+    # FSLogix storage discovery (PE4: region colocation; R6: profile redundancy)
+    # Three-stage: explicit param override -> host pool tag -> name-pattern scan.
+    Write-Host '  Discovering FSLogix storage...   ' -NoNewline
+    $fslogixHits = 0
+    $rgStorageCache = @{}  # cache per-RG storage lookups to avoid duplicate ARM calls
+    foreach ($hp in $script:allHostPools) {
+        $discovered = [PSCustomObject]@{
+            StorageAccount = $null
+            Method         = 'None'
+        }
+        $targetName = $null
+
+        # Stage 1: explicit parameter override (applies to every host pool)
+        if ($FSLogixStorageAccount) {
+            $targetName = $FSLogixStorageAccount
+            $discovered.Method = 'Override'
+        }
+        # Stage 2: host pool tag
+        elseif ($script:hostPoolTags[$hp.Id]) {
+            $tags = $script:hostPoolTags[$hp.Id]
+            if ($tags.ContainsKey($FSLogixTagName) -and $tags[$FSLogixTagName]) {
+                $targetName = $tags[$FSLogixTagName]
+                $discovered.Method = 'Tag'
+            }
+        }
+
+        # Stage 3: name-pattern scan within the host pool's RG
+        if (-not $targetName -and $FSLogixNamePattern) {
+            $hpRg = Get-RgFromArmId -ResourceId $hp.Id
+            if (-not $rgStorageCache.ContainsKey($hpRg)) {
+                try {
+                    $rgStorageCache[$hpRg] = @(Invoke-WithRetry -OperationName "Get-AzStorageAccount ($hpRg)" -ScriptBlock {
+                        Get-AzStorageAccount -ResourceGroupName $hpRg -ErrorAction Stop
+                    })
+                } catch {
+                    $rgStorageCache[$hpRg] = $null  # null = fetch failed
+                }
+            }
+            $rgStorage = $rgStorageCache[$hpRg]
+            if ($null -ne $rgStorage) {
+                $match = @($rgStorage | Where-Object { $_.StorageAccountName -like $FSLogixNamePattern }) | Select-Object -First 1
+                if ($match) {
+                    $discovered.StorageAccount = $match
+                    $discovered.Method = 'Pattern'
+                }
+            }
+        }
+
+        # Stages 1/2 returned a name - resolve it to a storage account object.
+        if ($targetName -and -not $discovered.StorageAccount) {
+            $hpRg = Get-RgFromArmId -ResourceId $hp.Id
+            try {
+                $sa = Invoke-WithRetry -OperationName "Get-AzStorageAccount ($targetName)" -ScriptBlock {
+                    # Try the host pool's RG first, fall back to sub-wide lookup
+                    Get-AzStorageAccount -ResourceGroupName $hpRg -Name $targetName -ErrorAction Stop
+                }
+                if ($sa) { $discovered.StorageAccount = $sa }
+            } catch {
+                # Fallback: sub-wide scan (slower but handles cross-RG storage)
+                try {
+                    $all = Invoke-WithRetry -OperationName "Get-AzStorageAccount (sub-wide)" -ScriptBlock {
+                        Get-AzStorageAccount -ErrorAction Stop
+                    }
+                    $match = @($all | Where-Object { $_.StorageAccountName -eq $targetName }) | Select-Object -First 1
+                    if ($match) { $discovered.StorageAccount = $match }
+                } catch {
+                    Write-Verbose "FSLogix storage lookup failed for ${targetName}: $($_.Exception.Message)"
+                }
+            }
+        }
+
+        $script:fslogixDiscovery[$hp.Id] = $discovered
+        if ($discovered.StorageAccount) { $fslogixHits++ }
+    }
+
+    # StorageFetchFailed flag fires only if every RG's storage list failed - a
+    # blanket permissions problem, not a "couldn't find FSLogix" outcome.
+    $storageRgFailures = @($rgStorageCache.Values | Where-Object { $null -eq $_ }).Count
+    if ($rgStorageCache.Count -gt 0 -and $storageRgFailures -eq $rgStorageCache.Count) {
+        $script:StorageFetchFailed = $true
+        Write-Host 'Permission denied (FSLogix checks will return Info)' -ForegroundColor Yellow
+    } elseif ($fslogixHits -eq 0 -and -not $FSLogixStorageAccount) {
+        Write-Host 'No FSLogix storage auto-discovered (Info-level finding)' -ForegroundColor Yellow
+    } else {
+        Write-Host ("Linked {0} host pool(s) to FSLogix storage" -f $fslogixHits) -ForegroundColor Green
+    }
+
+    # Defender for Cloud pricing (S5)
+    Write-Host '  Fetching Defender pricing...     ' -NoNewline
+    try {
+        $script:securityPricings = @(Invoke-WithRetry -OperationName 'Get-AzSecurityPricing' -ScriptBlock {
+            Get-AzSecurityPricing -ErrorAction Stop
+        })
+        Write-Host ("Found {0} pricing entry(ies)" -f $script:securityPricings.Count) -ForegroundColor Green
+    } catch {
+        $script:SecurityPricingFetchFailed = $true
+        $script:securityPricings = @()
+        Write-Host 'Permission denied (Defender check will return Info)' -ForegroundColor Yellow
+    }
+
+    # Private endpoints (S6) - subscription-wide is faster than per-RG and
+    # avoids missing endpoints in RGs that don't host the host pool itself.
+    Write-Host '  Fetching private endpoints...    ' -NoNewline
+    try {
+        $script:privateEndpoints = @(Invoke-WithRetry -OperationName 'Get-AzPrivateEndpoint' -ScriptBlock {
+            Get-AzPrivateEndpoint -ErrorAction Stop
+        })
+        Write-Host ("Found {0} private endpoint(s)" -f $script:privateEndpoints.Count) -ForegroundColor Green
+    } catch {
+        $script:PrivateEndpointFetchFailed = $true
+        $script:privateEndpoints = @()
+        Write-Host 'Permission denied (Private Link check will return Info)' -ForegroundColor Yellow
+    }
+
+    # Activity log alerts (O5: Service Health alerts for AVD)
+    Write-Host '  Fetching activity log alerts...  ' -NoNewline
+    try {
+        $script:activityLogAlerts = @(Invoke-WithRetry -OperationName 'Get-AzActivityLogAlert' -ScriptBlock {
+            Get-AzActivityLogAlert -ErrorAction Stop
+        })
+        Write-Host ("Found {0} alert rule(s)" -f $script:activityLogAlerts.Count) -ForegroundColor Green
+    } catch {
+        $script:ActivityAlertFetchFailed = $true
+        $script:activityLogAlerts = @()
+        Write-Host 'Permission denied (Service Health alert check will return Info)' -ForegroundColor Yellow
     }
 
     $script:pooledHostPools   = @($script:allHostPools | Where-Object { $_.HostPoolType -eq 'Pooled' })
