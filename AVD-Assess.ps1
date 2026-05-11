@@ -228,6 +228,18 @@ $script:CheckCatalog = @{
         Remediation = 'Enable Accelerated Networking on every session host NIC. For VMs that support it (most Dsv3 / Dsv4 / Dsv5 / Esv4 / Esv5 sizes and above), this offloads packet processing to the host SmartNIC and typically halves end-to-end network latency. Stop the VM, run Set-AzNetworkInterface with -EnableAcceleratedNetworking $true on the NIC, then start the VM. Bake it into your deployment templates so new hosts are correctly configured from day one. If a VM SKU does not support Accelerated Networking, consider resizing to a modern SKU as part of your next refresh cycle.'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-network/accelerated-networking-overview'
     }
+
+    PremiumOsDisk = [PSCustomObject]@{
+        Name        = 'OS Disk Performance Tier'
+        Remediation = 'Move multi-session host pool OS disks to Premium SSD (Premium_LRS) at minimum. Sub-premium OS disks are the #1 cause of slow logon and laggy session experience on pooled hosts. To migrate: deallocate the VM, change the OS disk SKU via the Azure portal or Update-AzDisk -DiskSku Premium_LRS, then start the VM. Bake Premium_LRS into your deployment templates. For personal desktops, Standard SSD may be acceptable per WAF guidance, but Premium SSD still wins for logon and app launch performance.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/well-architected/azure-virtual-desktop/storage'
+    }
+
+    Gen2VirtualMachines = [PSCustomObject]@{
+        Name        = 'VM Generation (Gen2)'
+        Remediation = 'Plan a refresh of any Gen1 session host VMs to Gen2 images. Gen1 blocks Trusted Launch, Confidential VMs, vTPM, and several Windows 11 features, and indicates the underlying image lineage is stale (Azure has defaulted to Gen2 since 2022). Generation is set at deployment time and cannot be changed in place - the migration path is to deploy fresh session hosts from a Gen2-based image, drain the Gen1 hosts, then retire them. If your image build pipeline still produces Gen1, update the source image SKU to a Gen2 equivalent (most marketplace images now offer a "-g2" variant).'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-machines/generation-2'
+    }
 }
 
 function Get-Check {
@@ -561,6 +573,16 @@ function Initialize-DryRunData {
     Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 60 `
         -Finding '3 of 5 session host NIC(s) have Accelerated Networking enabled (60%). Disabled on: avd-prod-vm-04, avd-prod-vm-05.' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    $m = Get-Check 'PremiumOsDisk'
+    Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 67 `
+        -Finding '2 of 3 multi-session host OS disk(s) are Premium SSD or better (67%). Sub-premium: avd-prod-vm-05 (StandardSSD_LRS).' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    $m = Get-Check 'Gen2VirtualMachines'
+    Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+        -Finding 'All 5 session host(s) are Gen2 VMs.' `
+        -Remediation '' -LearnMore $m.LearnMore
 }
 
 # ==============================================================================
@@ -1374,6 +1396,14 @@ function Invoke-OperationsChecks {
 function Invoke-PerformanceChecks {
     Write-Section 'Performance Efficiency'
 
+    # Map session host VM resource IDs to their host pool type so PE2 can
+    # distinguish multi-session (Pooled) vs personal pool members - WAF
+    # guidance is stricter on disk SKU for the former.
+    $vmHostPoolType = @{}
+    foreach ($sh in $script:allSessionHosts) {
+        if ($sh.ResourceId) { $vmHostPoolType[$sh.ResourceId] = $sh._HostPoolType }
+    }
+
     # Check PE1: Accelerated Networking
     # Pass = 100% of session host NICs have it enabled.
     # Warning = proportional shortfall (score == % enabled).
@@ -1384,36 +1414,139 @@ function Invoke-PerformanceChecks {
         Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
             -Finding 'No NIC data available - either the assessed scope has no session host VMs, or the current identity lacks Microsoft.Network/networkInterfaces/read on the session host resource groups.' `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
-        return
-    }
+    } else {
+        $totalNics    = $script:vmNics.Count
+        $enabledNics  = 0
+        $disabledHosts = [System.Collections.Generic.List[string]]::new()
 
-    $totalNics    = $script:vmNics.Count
-    $enabledNics  = 0
-    $disabledHosts = [System.Collections.Generic.List[string]]::new()
+        foreach ($vm in $script:allVMs) {
+            if (-not $script:vmNics.ContainsKey($vm.Id)) { continue }
+            $nic = $script:vmNics[$vm.Id]
+            if ($nic.EnableAcceleratedNetworking) {
+                $enabledNics++
+            } else {
+                $disabledHosts.Add($vm.Name)
+            }
+        }
 
-    foreach ($vm in $script:allVMs) {
-        if (-not $script:vmNics.ContainsKey($vm.Id)) { continue }
-        $nic = $script:vmNics[$vm.Id]
-        if ($nic.EnableAcceleratedNetworking) {
-            $enabledNics++
+        if ($disabledHosts.Count -eq 0) {
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} session host NIC(s) have Accelerated Networking enabled." -f $totalNics) `
+                -Remediation '' -LearnMore $m.LearnMore
         } else {
-            $disabledHosts.Add($vm.Name)
+            $pct = [int][math]::Round(($enabledNics / $totalNics) * 100)
+            # Show up to 5 affected hosts inline; summarise the rest.
+            $shown = ($disabledHosts | Select-Object -First 5) -join ', '
+            $more  = if ($disabledHosts.Count -gt 5) { (" (+{0} more)" -f ($disabledHosts.Count - 5)) } else { '' }
+            $status = if ($pct -eq 0) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} session host NIC(s) have Accelerated Networking enabled ({2}%). Disabled on: {3}{4}." -f $enabledNics, $totalNics, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
 
-    if ($disabledHosts.Count -eq 0) {
-        Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
-            -Finding ("All {0} session host NIC(s) have Accelerated Networking enabled." -f $totalNics) `
-            -Remediation '' -LearnMore $m.LearnMore
-    } else {
-        $pct = [int][math]::Round(($enabledNics / $totalNics) * 100)
-        # Show up to 5 affected hosts inline; summarise the rest.
-        $shown = ($disabledHosts | Select-Object -First 5) -join ', '
-        $more  = if ($disabledHosts.Count -gt 5) { (" (+{0} more)" -f ($disabledHosts.Count - 5)) } else { '' }
-        $status = if ($pct -eq 0) { 'Fail' } else { 'Warning' }
-        Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
-            -Finding ("{0} of {1} session host NIC(s) have Accelerated Networking enabled ({2}%). Disabled on: {3}{4}." -f $enabledNics, $totalNics, $pct, $shown, $more) `
+    # Check PE2: OS Disk Performance Tier (Premium SSD for multi-session)
+    # Premium / PremiumV2 / Ultra / Premium_ZRS all count as "premium" here.
+    # Scoring is based on multi-session (Pooled) hosts only - personal pools
+    # get softer WAF guidance and are reported separately in the finding text.
+    $m = Get-Check 'PremiumOsDisk'
+    $premiumSkus = @('Premium_LRS','PremiumV2_LRS','UltraSSD_LRS','Premium_ZRS')
+
+    if ($script:DiskFetchFailed -or $script:vmOsDisks.Count -eq 0) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'No OS disk data available - either the assessed scope has no session host VMs, or the current identity lacks Microsoft.Compute/disks/read on the session host resource groups.' `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } else {
+        $msSubPremium = [System.Collections.Generic.List[string]]::new()
+        $msTotal     = 0
+        $personalSubPremium = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($vm in $script:allVMs) {
+            if (-not $script:vmOsDisks.ContainsKey($vm.Id)) { continue }
+            $disk = $script:vmOsDisks[$vm.Id]
+            $sku  = $disk.Sku.Name
+            $isPremium = $premiumSkus -contains $sku
+            $type = $vmHostPoolType[$vm.Id]
+            if ($type -eq 'Personal') {
+                if (-not $isPremium) { $personalSubPremium.Add(('{0} ({1})' -f $vm.Name, $sku)) }
+            } else {
+                $msTotal++
+                if (-not $isPremium) { $msSubPremium.Add(('{0} ({1})' -f $vm.Name, $sku)) }
+            }
+        }
+
+        if ($msTotal -eq 0 -and $personalSubPremium.Count -eq 0) {
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding 'All session host OS disks are Premium SSD or better.' `
+                -Remediation '' -LearnMore $m.LearnMore
+        } elseif ($msTotal -eq 0) {
+            # Only personal hosts present, and some are sub-premium - Info-level
+            # because WAF guidance is softer for personal desktops.
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+                -Finding ("{0} personal session host(s) use sub-premium OS disks. WAF allows Standard SSD for personal desktops but Premium SSD still wins on logon and app launch performance." -f $personalSubPremium.Count) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        } elseif ($msSubPremium.Count -eq 0) {
+            $tail = if ($personalSubPremium.Count -gt 0) {
+                (" {0} personal host(s) on sub-premium disks (Info - softer WAF guidance applies)." -f $personalSubPremium.Count)
+            } else { '' }
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} multi-session host OS disks are Premium SSD or better.{1}" -f $msTotal, $tail) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $okMs   = $msTotal - $msSubPremium.Count
+            $pct    = [int][math]::Round(($okMs / $msTotal) * 100)
+            $shown  = ($msSubPremium | Select-Object -First 5) -join ', '
+            $more   = if ($msSubPremium.Count -gt 5) { (" (+{0} more)" -f ($msSubPremium.Count - 5)) } else { '' }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            $tail   = if ($personalSubPremium.Count -gt 0) {
+                (" {0} additional personal host(s) on sub-premium disks (Info - softer WAF guidance)." -f $personalSubPremium.Count)
+            } else { '' }
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} multi-session host OS disk(s) are Premium SSD or better ({2}%). Sub-premium: {3}{4}.{5}" -f $okMs, $msTotal, $pct, $shown, $more, $tail) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # Check PE3: VM Generation (Gen2)
+    # Reads HyperVGeneration on the OS disk (V1 / V2). Pass if all Gen2,
+    # proportional Warning/Fail if any Gen1.
+    $m = Get-Check 'Gen2VirtualMachines'
+
+    if ($script:DiskFetchFailed -or $script:vmOsDisks.Count -eq 0) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'No OS disk data available to determine VM generation. Requires Microsoft.Compute/disks/read on the session host resource groups.' `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    } else {
+        $gen1Hosts = [System.Collections.Generic.List[string]]::new()
+        $total = 0
+        foreach ($vm in $script:allVMs) {
+            if (-not $script:vmOsDisks.ContainsKey($vm.Id)) { continue }
+            $disk = $script:vmOsDisks[$vm.Id]
+            $total++
+            # HyperVGeneration is 'V1' or 'V2'. Missing == treat as Gen1 (older
+            # disks predated the property and historically were always Gen1).
+            $gen = if ($disk.HyperVGeneration) { $disk.HyperVGeneration } else { 'V1' }
+            if ($gen -ne 'V2') { $gen1Hosts.Add($vm.Name) }
+        }
+
+        if ($total -eq 0) {
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+                -Finding 'No session host disks available to evaluate VM generation.' `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        } elseif ($gen1Hosts.Count -eq 0) {
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} session host(s) are Gen2 VMs." -f $total) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $ok = $total - $gen1Hosts.Count
+            $pct = [int][math]::Round(($ok / $total) * 100)
+            $shown = ($gen1Hosts | Select-Object -First 5) -join ', '
+            $more  = if ($gen1Hosts.Count -gt 5) { (" (+{0} more)" -f ($gen1Hosts.Count - 5)) } else { '' }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} session host(s) are Gen2 VMs ({2}%). Gen1 hosts: {3}{4}." -f $ok, $total, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
     }
 }
 
