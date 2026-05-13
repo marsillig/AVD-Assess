@@ -228,6 +228,12 @@ $script:CheckCatalog = @{
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/troubleshoot-agent'
     }
 
+    ServiceHealthAlerts = [PSCustomObject]@{
+        Name        = 'Service Health Alerts'
+        Remediation = 'Create at least one Azure Service Health activity log alert that covers Azure Virtual Desktop on this subscription. In the Azure portal: Service Health > Service health alerts > Add service health alert, scope it to this subscription, pick "Azure Virtual Desktop" under Services (or leave Services blank to cover all services), tick the event types you want notified on (Service issue, Planned maintenance, Health advisory, Security advisory), and attach an action group that notifies your operations channel. Most AVD outages and maintenance windows are knowable in advance through Service Health - alerts turn that knowledge into a notification before users start reporting symptoms.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/set-up-service-alerts'
+    }
+
     LoadBalancingAlgorithm = [PSCustomObject]@{
         Name        = 'Load Balancing Algorithm'
         Remediation = 'BreadthFirst is recommended when user experience is the top priority - each user gets more dedicated resources. DepthFirst is recommended when cost is the priority and the workload is not resource-intensive - it allows more VMs to be fully shut down during off-peak hours. Review your choice against your scaling plan configuration: DepthFirst works best with aggressive scale-in, BreadthFirst pairs well with reserved instances on a core set of always-on hosts.'
@@ -612,6 +618,11 @@ function Initialize-DryRunData {
     Add-CheckResult -Category Operations -CheckName $m.Name -Status Pass -Score 100 `
         -Finding 'All session hosts have a healthy agent update state.' `
         -Remediation '' -LearnMore $m.LearnMore
+
+    $m = Get-Check 'ServiceHealthAlerts'
+    Add-CheckResult -Category Operations -CheckName $m.Name -Status Warning -Score 40 `
+        -Finding 'No Service Health alerts cover Azure Virtual Desktop. 3 activity log alert rule(s) exist on this subscription, but none cover Azure Virtual Desktop Service Health events. There is no proactive notification channel for planned maintenance, service issues, or health advisories from Microsoft.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'LoadBalancingAlgorithm'
     Add-CheckResult -Category Operations -CheckName $m.Name -Status Pass -Score 100 `
@@ -1666,6 +1677,101 @@ function Invoke-OperationsChecks {
             $names = ($badUpdate | ForEach-Object { ($_.Name -split '/')[-1] + " ($($_.UpdateState))" }) -join ', '
             Add-CheckResult -Category Operations -CheckName $m.Name -Status Fail -Score $pct `
                 -Finding ("{0} session host(s) have a Failed or Stalled agent update: {1}." -f $badUpdate.Count, $names) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # Check O5: Service Health alerts
+    # Walks activity log alerts and matches the ones that:
+    #   1) are enabled,
+    #   2) carry a category leaf condition of ServiceHealth, and
+    #   3) either have no service filter at all (covers all services, including
+    #      AVD), or have a filter that explicitly names Azure Virtual Desktop /
+    #      Windows Virtual Desktop, or a resourceProvider filter of
+    #      Microsoft.DesktopVirtualization.
+    # Leaf conditions can be wrapped in AnyOf (e.g. incidentType in [Incident,
+    # Maintenance]) - the flattening below hoists those leaves up one level so
+    # they're inspected alongside top-level leaves.
+    $m = Get-Check 'ServiceHealthAlerts'
+    if ($script:ActivityAlertFetchFailed) {
+        Add-CheckResult -Category Operations -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Unable to enumerate activity log alerts - the current identity lacks Microsoft.Insights/activityLogAlerts/read on the subscription.' `
+            -Remediation 'Grant Monitoring Reader (or Reader on Microsoft.Insights) on the subscription and re-run.' `
+            -LearnMore $m.LearnMore
+    } else {
+        $avdServiceNames = @('Azure Virtual Desktop', 'Windows Virtual Desktop')
+        $avdProvider     = 'Microsoft.DesktopVirtualization'
+        $matchingAlerts  = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($alert in $script:activityLogAlerts) {
+            # Disabled alerts don't fire even if their conditions match.
+            if ($null -ne $alert.PSObject.Properties['Enabled'] -and $alert.Enabled -eq $false) { continue }
+            if (-not $alert.Condition -or -not $alert.Condition.AllOf) { continue }
+
+            $leaves = [System.Collections.Generic.List[object]]::new()
+            foreach ($entry in $alert.Condition.AllOf) {
+                if ($entry.AnyOf) {
+                    foreach ($nested in $entry.AnyOf) { $leaves.Add($nested) }
+                } else {
+                    $leaves.Add($entry)
+                }
+            }
+
+            $isServiceHealth = $false
+            foreach ($leaf in $leaves) {
+                if (-not $leaf.Field -or ($leaf.Field -ine 'category')) { continue }
+                if ($leaf.Equals -and ($leaf.Equals -ieq 'ServiceHealth')) { $isServiceHealth = $true; break }
+                if ($leaf.ContainsAny -and (@($leaf.ContainsAny) | Where-Object { $_ -ieq 'ServiceHealth' })) {
+                    $isServiceHealth = $true; break
+                }
+            }
+            if (-not $isServiceHealth) { continue }
+
+            $serviceFilters = @($leaves | Where-Object {
+                $_.Field -and (
+                    ($_.Field -ieq 'resourceProvider') -or
+                    ($_.Field -match '(?i)impactedservices.*servicename')
+                )
+            })
+
+            $coversAvd = $false
+            if ($serviceFilters.Count -eq 0) {
+                # No service / provider filter at all -> matches every service.
+                $coversAvd = $true
+            } else {
+                foreach ($filter in $serviceFilters) {
+                    $targets = if ($filter.Field -ieq 'resourceProvider') { @($avdProvider) } else { $avdServiceNames }
+                    if ($filter.Equals -and ($targets | Where-Object { $_ -ieq $filter.Equals })) {
+                        $coversAvd = $true; break
+                    }
+                    if ($filter.ContainsAny) {
+                        $hit = @($filter.ContainsAny | Where-Object {
+                            $val = $_
+                            $targets | Where-Object { $_ -ieq $val }
+                        })
+                        if ($hit.Count -gt 0) { $coversAvd = $true; break }
+                    }
+                }
+            }
+
+            if ($coversAvd) { $matchingAlerts.Add($alert.Name) }
+        }
+
+        if ($matchingAlerts.Count -gt 0) {
+            $shown = ($matchingAlerts | Select-Object -First 3) -join ', '
+            $more  = if ($matchingAlerts.Count -gt 3) { (" (+{0} more)" -f ($matchingAlerts.Count - 3)) } else { '' }
+            Add-CheckResult -Category Operations -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("{0} Service Health alert rule(s) cover Azure Virtual Desktop on this subscription: {1}{2}." -f $matchingAlerts.Count, $shown, $more) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $totalAlerts = $script:activityLogAlerts.Count
+            $context = if ($totalAlerts -eq 0) {
+                'No activity log alerts exist on this subscription.'
+            } else {
+                ("{0} activity log alert rule(s) exist on this subscription, but none cover Azure Virtual Desktop Service Health events." -f $totalAlerts)
+            }
+            Add-CheckResult -Category Operations -CheckName $m.Name -Status Warning -Score 40 `
+                -Finding ("No Service Health alerts cover Azure Virtual Desktop. {0} There is no proactive notification channel for planned maintenance, service issues, or health advisories from Microsoft." -f $context) `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
