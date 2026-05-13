@@ -805,8 +805,13 @@ function Get-AvdEnvironmentData {
             $vmRg   = Get-RgFromArmId -ResourceId $vmId
             $vmName = $parts[-1]
             try {
+                # Model view (no -Status) - InstanceView strips NetworkProfile,
+                # StorageProfile, SecurityProfile, Zones, etc., which v2 checks
+                # (PE1/PE2/PE3, R5, Trusted Launch, Entra ID Join) all need.
+                # Session host health uses $sh.Status from Az.DesktopVirtualization,
+                # so we don't need VM instance-view data for any current check.
                 $vm = Invoke-WithRetry -OperationName "Get-AzVM ($vmName)" -ScriptBlock {
-                    Get-AzVM -ResourceGroupName $vmRg -Name $vmName -Status -ErrorAction Stop
+                    Get-AzVM -ResourceGroupName $vmRg -Name $vmName -ErrorAction Stop
                 }
                 if ($vm) { $vmList.Add($vm) }
             } catch {
@@ -1332,7 +1337,12 @@ function Invoke-ReliabilityChecks {
     # pools cannot be zone-distributed by definition.
     $m = Get-Check 'AvailabilityZoneDistribution'
     $vmById = @{}
-    foreach ($vm in $script:allVMs) { $vmById[$vm.Id] = $vm }
+    # Guard against VMs missing an Id - hashtable assignment with a null key
+    # throws "Index operation failed; the array index evaluated to null" on
+    # PowerShell 7.
+    foreach ($vm in $script:allVMs) {
+        if ($vm -and $vm.Id) { $vmById[$vm.Id] = $vm }
+    }
 
     if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
         Add-CheckResult -Category Reliability -CheckName $m.Name -Status Info -Score 100 `
