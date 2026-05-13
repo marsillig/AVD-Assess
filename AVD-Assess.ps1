@@ -422,20 +422,34 @@ function ConvertTo-HtmlSafe {
 }
 
 function New-DonutSvg {
-    param([int]$Score, [int]$Size = 130)
+    # $Score is int or $null. Null renders a muted grey ring with an "N/A"
+    # label so an information-degraded category is visually distinct from a
+    # passing 100/100.
+    param($Score, [int]$Size = 130)
     $circumference = [math]::Round(2 * [math]::PI * 54, 3)
-    $dash = [math]::Round(($Score / 100.0) * $circumference, 3)
-    $gap  = [math]::Round($circumference - $dash, 3)
-    $colour = Get-ScoreColour -Score $Score
-    $fontSize = if ($Size -ge 130) { 28 } else { 22 }
+    if ($null -eq $Score) {
+        $dash    = 0
+        $gap     = $circumference
+        $colour  = '#64748b'   # muted grey - matches .dim text token
+        $label   = 'N/A'
+        $aria    = 'Not applicable - no scorable checks in this category'
+        $fontSize = if ($Size -ge 130) { 22 } else { 18 }
+    } else {
+        $dash    = [math]::Round(($Score / 100.0) * $circumference, 3)
+        $gap     = [math]::Round($circumference - $dash, 3)
+        $colour  = Get-ScoreColour -Score $Score
+        $label   = $Score
+        $aria    = "Score $Score out of 100"
+        $fontSize = if ($Size -ge 130) { 28 } else { 22 }
+    }
     return @"
-<svg viewBox="0 0 130 130" width="$Size" height="$Size" class="donut" role="img" aria-label="Score $Score out of 100">
+<svg viewBox="0 0 130 130" width="$Size" height="$Size" class="donut" role="img" aria-label="$aria">
   <circle cx="65" cy="65" r="54" fill="none" stroke="#1a3547" stroke-width="12"/>
   <circle cx="65" cy="65" r="54" fill="none" stroke="$colour" stroke-width="12"
           stroke-dasharray="$dash $gap"
           transform="rotate(-90 65 65)"
           stroke-linecap="round"/>
-  <text x="65" y="73" text-anchor="middle" fill="#ffffff" font-size="$fontSize" font-weight="700" font-family="Inter, system-ui, sans-serif">$Score</text>
+  <text x="65" y="73" text-anchor="middle" fill="#ffffff" font-size="$fontSize" font-weight="700" font-family="Inter, system-ui, sans-serif">$label</text>
 </svg>
 "@
 }
@@ -796,7 +810,9 @@ function Get-AvdEnvironmentData {
 
     # VMs
     Write-Host '  Fetching virtual machines...     ' -NoNewline
-    $vmList = [System.Collections.Generic.List[object]]::new()
+    $vmList    = [System.Collections.Generic.List[object]]::new()
+    $vmErrors  = [System.Collections.Generic.List[string]]::new()  # first few failures, for diagnostics
+    $vmAttempts = 0
     try {
         $uniqueVmIds = $script:allSessionHosts.ResourceId | Where-Object { $_ } | Select-Object -Unique
         foreach ($vmId in $uniqueVmIds) {
@@ -804,6 +820,7 @@ function Get-AvdEnvironmentData {
             if ($parts.Count -lt 9) { continue }
             $vmRg   = Get-RgFromArmId -ResourceId $vmId
             $vmName = $parts[-1]
+            $vmAttempts++
             try {
                 # Model view (no -Status) - InstanceView strips NetworkProfile,
                 # StorageProfile, SecurityProfile, Zones, etc., which v2 checks
@@ -815,6 +832,9 @@ function Get-AvdEnvironmentData {
                 }
                 if ($vm) { $vmList.Add($vm) }
             } catch {
+                if ($vmErrors.Count -lt 3) {
+                    $vmErrors.Add(('{0}: {1}' -f $vmName, $_.Exception.Message))
+                }
                 Write-Verbose "VM fetch failed for $vmId : $($_.Exception.Message)"
             }
         }
@@ -825,8 +845,19 @@ function Get-AvdEnvironmentData {
         $script:allVMs = @()
         Write-Host 'FAILED (continuing - VM checks will return Info)' -ForegroundColor Yellow
     }
+
+    # If session hosts exist but no VMs resolved, surface the first few errors
+    # so the user can see *why* (orphan session-host records, cross-subscription
+    # VMs, RBAC missing virtualMachines/read, etc.) instead of guessing.
     if ($script:allSessionHosts.Count -gt 0 -and $script:allVMs.Count -eq 0) {
         $script:VmFetchFailed = $true
+        if ($vmAttempts -gt 0 -and $vmErrors.Count -gt 0) {
+            Write-Host ("    {0} of {1} session host VM lookup(s) failed. First error(s):" -f $vmErrors.Count, $vmAttempts) -ForegroundColor Yellow
+            foreach ($err in $vmErrors) {
+                Write-Host ("      - {0}" -f $err) -ForegroundColor DarkYellow
+            }
+            Write-Host '    Common causes: orphaned session host records (VM deleted but registration remains), VMs deployed in a different subscription than the current Az context, or missing Microsoft.Compute/virtualMachines/read RBAC on the VM resource group.' -ForegroundColor DarkYellow
+        }
     }
     $script:VmCount = $script:allVMs.Count
 
@@ -2017,16 +2048,25 @@ function Invoke-PerformanceChecks {
 # ==============================================================================
 
 function Get-CategoryScore {
+    # Returns $null when no scorable (non-Info) checks exist in the category -
+    # callers render this as N/A. A "100" default would falsely paint an
+    # information-degraded category as a clean pass, which is misleading
+    # when (for example) every VM-dependent check has returned Info due to
+    # a VM fetch failure.
     param([string]$Category)
     $items = @($script:Checks | Where-Object { $_.Category -eq $Category -and $_.Status -ne 'Info' })
-    if ($items.Count -eq 0) { return 100 }
+    if ($items.Count -eq 0) { return $null }
     $avg = ($items | Measure-Object -Property Score -Average).Average
     return [int][math]::Round($avg)
 }
 
 function Get-OverallScore {
+    # Excludes N/A categories from the average so an information-degraded
+    # category doesn't drag the overall down. Returns $null if every
+    # category is N/A.
     $cats = @('Cost','Reliability','Security','Operations','Performance')
-    $scores = $cats | ForEach-Object { Get-CategoryScore $_ }
+    $scores = @($cats | ForEach-Object { Get-CategoryScore $_ } | Where-Object { $null -ne $_ })
+    if ($scores.Count -eq 0) { return $null }
     return [int][math]::Round(($scores | Measure-Object -Average).Average)
 }
 
@@ -2038,6 +2078,11 @@ function New-CategoryCardHtml {
     param([string]$Category, [string]$DisplayName)
     $score  = Get-CategoryScore -Category $Category
     $donut  = New-DonutSvg -Score $score -Size 96
+    $scoreHtml = if ($null -eq $score) {
+        '<span class="cat-score-na">N/A</span>'
+    } else {
+        "$score<span class=""cat-score-suffix"">/100</span>"
+    }
     $checks = @($script:Checks | Where-Object { $_.Category -eq $Category })
 
     $rows = [System.Text.StringBuilder]::new()
@@ -2084,7 +2129,7 @@ $remBlock
     $donut
     <div class="category-meta">
       <div class="sub">$DisplayName</div>
-      <div class="cat-score">$score<span class="cat-score-suffix">/100</span></div>
+      <div class="cat-score">$scoreHtml</div>
     </div>
   </div>
   <div class="check-list">
@@ -2097,6 +2142,11 @@ $($rows.ToString())
 function New-HtmlReport {
     $overall = Get-OverallScore
     $overallDonut = New-DonutSvg -Score $overall -Size 140
+    $overallHtml = if ($null -eq $overall) {
+        '<span class="overall-na">N/A</span>'
+    } else {
+        "$overall<span class=""suffix"">/100</span>"
+    }
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
 
     $subName = ConvertTo-HtmlSafe $script:Context.SubscriptionName
@@ -2247,6 +2297,16 @@ header.hero {
   line-height: 1;
   letter-spacing: -0.02em;
 }
+.category-meta .cat-score-na {
+  font-size: 22px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+.overall .overall-na {
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
 .category-meta .cat-score-suffix {
   font-size: 14px;
   color: #64748b;
@@ -2366,7 +2426,7 @@ footer a:hover { color: #B3FF00; }
       $overallDonut
       <div>
         <div class="label">Overall Score</div>
-        <div class="big">$overall<span class="suffix">/100</span></div>
+        <div class="big">$overallHtml</div>
       </div>
     </div>
   </header>
@@ -2433,14 +2493,16 @@ function Invoke-Main {
     $perf = Get-CategoryScore 'Performance'
     $overall = Get-OverallScore
 
+    $fmtScore = { param($s) if ($null -eq $s) { 'N/A (no scorable checks)' } else { ('{0}/100' -f $s) } }
+
     Write-Section 'Score Summary'
-    Write-Host ("  Cost Optimisation      : {0}/100" -f $cost)    -ForegroundColor White
-    Write-Host ("  Reliability            : {0}/100" -f $rel)     -ForegroundColor White
-    Write-Host ("  Security Posture       : {0}/100" -f $sec)     -ForegroundColor White
-    Write-Host ("  Operational Excellence : {0}/100" -f $ops)     -ForegroundColor White
-    Write-Host ("  Performance Efficiency : {0}/100" -f $perf)    -ForegroundColor White
+    Write-Host ("  Cost Optimisation      : {0}" -f (& $fmtScore $cost))    -ForegroundColor White
+    Write-Host ("  Reliability            : {0}" -f (& $fmtScore $rel))     -ForegroundColor White
+    Write-Host ("  Security Posture       : {0}" -f (& $fmtScore $sec))     -ForegroundColor White
+    Write-Host ("  Operational Excellence : {0}" -f (& $fmtScore $ops))     -ForegroundColor White
+    Write-Host ("  Performance Efficiency : {0}" -f (& $fmtScore $perf))    -ForegroundColor White
     Write-Host ''
-    Write-Host ("  Overall Score          : {0}/100" -f $overall) -ForegroundColor Cyan
+    Write-Host ("  Overall Score          : {0}" -f (& $fmtScore $overall)) -ForegroundColor Cyan
 
     # Render HTML
     $html = New-HtmlReport
