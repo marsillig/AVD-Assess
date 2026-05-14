@@ -529,6 +529,7 @@ function Initialize-DryRunData {
     $script:SecurityPricingFetchFailed = $false
     $script:PrivateEndpointFetchFailed = $false
     $script:ActivityAlertFetchFailed   = $false
+    $script:VmEphemeralCount           = 0
 
     # Each entry below seeds one synthetic check result. Name / Remediation /
     # LearnMore come from $script:CheckCatalog so the dry-run report stays in
@@ -733,6 +734,7 @@ function Get-AvdEnvironmentData {
     $script:SecurityPricingFetchFailed = $false
     $script:PrivateEndpointFetchFailed = $false
     $script:ActivityAlertFetchFailed   = $false
+    $script:VmEphemeralCount           = 0
 
     # Host pools
     try {
@@ -948,32 +950,71 @@ function Get-AvdEnvironmentData {
 
     # OS disks (PE2: disk SKU; PE3: VM generation)
     Write-Host '  Fetching OS disks...             ' -NoNewline
-    $diskOk = 0
+    $diskOk        = 0
+    $diskEphemeral = 0   # VMs using ephemeral OS disks (no separate ARM resource)
+    $diskErrors    = [System.Collections.Generic.List[string]]::new()
     if ($script:allVMs.Count -gt 0) {
         foreach ($vm in $script:allVMs) {
             $diskId = $null
             if ($vm.StorageProfile -and $vm.StorageProfile.OsDisk -and $vm.StorageProfile.OsDisk.ManagedDisk) {
                 $diskId = $vm.StorageProfile.OsDisk.ManagedDisk.Id
             }
-            if (-not $diskId) { continue }
+            if (-not $diskId) {
+                # Most likely cause: ephemeral OS disk (DiffDiskSettings.Option = Local).
+                # No ARM resource exists for ephemeral disks, so Get-AzDisk has nothing
+                # to fetch. PE2/PE3 will return Info with an honest "ephemeral disk" finding.
+                $diskEphemeral++
+                continue
+            }
+            # Get-AzDisk doesn't accept -ResourceId; only -ResourceGroupName + -DiskName.
+            # Parse the disk ARM ID into those parts.
+            $diskParts = $diskId -split '/'
+            if ($diskParts.Count -lt 9) {
+                if ($diskErrors.Count -lt 3) {
+                    $diskErrors.Add(('{0}: unparseable disk ID ({1})' -f $vm.Name, $diskId))
+                }
+                continue
+            }
+            $diskRg   = Get-RgFromArmId -ResourceId $diskId
+            $diskName = $diskParts[-1]
             try {
-                $disk = Invoke-WithRetry -OperationName "Get-AzDisk ($($vm.Name))" -ScriptBlock {
-                    Get-AzDisk -ResourceId $diskId -ErrorAction Stop
+                $disk = Invoke-WithRetry -OperationName "Get-AzDisk ($diskName)" -ScriptBlock {
+                    Get-AzDisk -ResourceGroupName $diskRg -DiskName $diskName -ErrorAction Stop
                 }
                 if ($disk) {
                     $script:vmOsDisks[$vm.Id] = $disk
                     $diskOk++
                 }
             } catch {
+                if ($diskErrors.Count -lt 3) {
+                    $diskErrors.Add(('{0}: {1}' -f $vm.Name, $_.Exception.Message))
+                }
                 Write-Verbose "OS disk fetch failed for $($vm.Name): $($_.Exception.Message)"
             }
         }
     }
-    if ($script:allVMs.Count -gt 0 -and $diskOk -eq 0) {
+    $script:VmEphemeralCount = $diskEphemeral
+
+    if ($script:allVMs.Count -eq 0) {
+        Write-Host 'Skipped (no VMs)' -ForegroundColor DarkGray
+    } elseif ($diskOk -gt 0) {
+        $tail = if ($diskEphemeral -gt 0) { (" ({0} ephemeral, skipped)" -f $diskEphemeral) } else { '' }
+        Write-Host ("Found {0} disk(s){1}" -f $diskOk, $tail) -ForegroundColor Green
+    } elseif ($diskEphemeral -eq $script:allVMs.Count) {
+        # All VMs use ephemeral disks - this is an intentional configuration, not a failure.
         $script:DiskFetchFailed = $true
-        Write-Host 'Permission denied (Disk SKU / Gen2 checks will return Info)' -ForegroundColor Yellow
+        Write-Host ("All {0} VM(s) use ephemeral OS disks (Disk SKU / Gen2 checks will return Info)" -f $diskEphemeral) -ForegroundColor Yellow
     } else {
-        Write-Host ("Found {0} disk(s)" -f $diskOk) -ForegroundColor Green
+        # Some/all VMs had managed disks but Get-AzDisk failed for them.
+        $script:DiskFetchFailed = $true
+        Write-Host 'No disks resolved (Disk SKU / Gen2 checks will return Info)' -ForegroundColor Yellow
+        if ($diskErrors.Count -gt 0) {
+            Write-Host ("    {0} of {1} managed disk lookup(s) failed. First error(s):" -f $diskErrors.Count, ($script:allVMs.Count - $diskEphemeral)) -ForegroundColor Yellow
+            foreach ($err in $diskErrors) {
+                Write-Host ("      - {0}" -f $err) -ForegroundColor DarkYellow
+            }
+            Write-Host '    Common causes: Az.Compute SDK version mismatch (Update-Module Az.Compute -Force), the disk has been deleted, or the disk lives in a subscription other than the current Az context.' -ForegroundColor DarkYellow
+        }
     }
 
     # FSLogix storage discovery (PE4: region colocation; R6: profile redundancy)
@@ -1896,8 +1937,13 @@ function Invoke-PerformanceChecks {
     $premiumSkus = @('Premium_LRS','PremiumV2_LRS','UltraSSD_LRS','Premium_ZRS')
 
     if ($script:DiskFetchFailed -or $script:vmOsDisks.Count -eq 0) {
+        $finding = if ($script:VmEphemeralCount -gt 0 -and $script:VmEphemeralCount -eq $script:allVMs.Count) {
+            "All $($script:VmEphemeralCount) session host(s) use ephemeral OS disks. Ephemeral disks live on the host's local SSD with no separate ARM resource, so this check (which evaluates the managed disk SKU) does not apply. Ephemeral disks are inherently fast - performance is determined by the VM size's local cache, not a disk SKU."
+        } else {
+            'No OS disk data available - either the assessed scope has no session host VMs, the disks were deleted, or Get-AzDisk failed (see the data collection output for the specific error).'
+        }
         Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
-            -Finding 'No OS disk data available - either the assessed scope has no session host VMs, or the current identity lacks Microsoft.Compute/disks/read on the session host resource groups.' `
+            -Finding $finding `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
     } else {
         $msSubPremium = [System.Collections.Generic.List[string]]::new()
@@ -1956,8 +2002,13 @@ function Invoke-PerformanceChecks {
     $m = Get-Check 'Gen2VirtualMachines'
 
     if ($script:DiskFetchFailed -or $script:vmOsDisks.Count -eq 0) {
+        $finding = if ($script:VmEphemeralCount -gt 0 -and $script:VmEphemeralCount -eq $script:allVMs.Count) {
+            "All $($script:VmEphemeralCount) session host(s) use ephemeral OS disks. The Gen2 indicator (HyperVGeneration) lives on the managed disk resource, which doesn't exist for ephemeral disks. Re-deploy from a Gen2 marketplace image (e.g. the '-g2' SKU variant of Windows 11 Enterprise multi-session) to inherit Gen2 features regardless of disk type."
+        } else {
+            'No OS disk data available to determine VM generation - either the assessed scope has no session host VMs, the disks were deleted, or Get-AzDisk failed (see the data collection output for the specific error).'
+        }
         Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
-            -Finding 'No OS disk data available to determine VM generation. Requires Microsoft.Compute/disks/read on the session host resource groups.' `
+            -Finding $finding `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
     } else {
         $gen1Hosts = [System.Collections.Generic.List[string]]::new()
@@ -2070,6 +2121,18 @@ function Get-OverallScore {
     return [int][math]::Round(($scores | Measure-Object -Average).Average)
 }
 
+function Get-CategoryScoredTally {
+    # Returns @{Scored=<int>; Total=<int>} for a category. Callers render
+    # "X of Y scored" alongside the score whenever Scored < Total - so users
+    # see when a passing-looking score is actually based on a partial
+    # evaluation (e.g. PE returns 100/100 with 1 of 4 checks because the
+    # other 3 went Info).
+    param([string]$Category)
+    $all     = @($script:Checks | Where-Object { $_.Category -eq $Category })
+    $scored  = @($all | Where-Object { $_.Status -ne 'Info' })
+    return @{ Scored = $scored.Count; Total = $all.Count }
+}
+
 # ==============================================================================
 # HTML REPORT
 # ==============================================================================
@@ -2083,6 +2146,13 @@ function New-CategoryCardHtml {
     } else {
         "$score<span class=""cat-score-suffix"">/100</span>"
     }
+    # When a category has at least one scorable check but not all are scorable,
+    # surface the tally so a "100/100 (1 of 4 scored)" doesn't read as a clean
+    # pass when 3 of 4 checks couldn't actually be evaluated.
+    $tally = Get-CategoryScoredTally -Category $Category
+    $tallyHtml = if ($null -ne $score -and $tally.Scored -lt $tally.Total) {
+        ('<div class="cat-scored-tally">{0} of {1} scored</div>' -f $tally.Scored, $tally.Total)
+    } else { '' }
     $checks = @($script:Checks | Where-Object { $_.Category -eq $Category })
 
     $rows = [System.Text.StringBuilder]::new()
@@ -2130,6 +2200,7 @@ $remBlock
     <div class="category-meta">
       <div class="sub">$DisplayName</div>
       <div class="cat-score">$scoreHtml</div>
+      $tallyHtml
     </div>
   </div>
   <div class="check-list">
@@ -2302,6 +2373,13 @@ header.hero {
   font-weight: 700;
   color: #64748b;
   letter-spacing: 0.04em;
+}
+.category-meta .cat-scored-tally {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-top: 4px;
+  letter-spacing: 0.02em;
 }
 .overall .overall-na {
   color: #64748b;
@@ -2493,16 +2571,25 @@ function Invoke-Main {
     $perf = Get-CategoryScore 'Performance'
     $overall = Get-OverallScore
 
-    $fmtScore = { param($s) if ($null -eq $s) { 'N/A (no scorable checks)' } else { ('{0}/100' -f $s) } }
+    $fmtScore = {
+        param($s, $category)
+        $base = if ($null -eq $s) { 'N/A (no scorable checks)' } else { ('{0}/100' -f $s) }
+        if ($null -eq $category) { return $base }
+        $t = Get-CategoryScoredTally -Category $category
+        if ($null -ne $s -and $t.Scored -lt $t.Total) {
+            return ('{0} ({1} of {2} scored)' -f $base, $t.Scored, $t.Total)
+        }
+        return $base
+    }
 
     Write-Section 'Score Summary'
-    Write-Host ("  Cost Optimisation      : {0}" -f (& $fmtScore $cost))    -ForegroundColor White
-    Write-Host ("  Reliability            : {0}" -f (& $fmtScore $rel))     -ForegroundColor White
-    Write-Host ("  Security Posture       : {0}" -f (& $fmtScore $sec))     -ForegroundColor White
-    Write-Host ("  Operational Excellence : {0}" -f (& $fmtScore $ops))     -ForegroundColor White
-    Write-Host ("  Performance Efficiency : {0}" -f (& $fmtScore $perf))    -ForegroundColor White
+    Write-Host ("  Cost Optimisation      : {0}" -f (& $fmtScore $cost    'Cost'))        -ForegroundColor White
+    Write-Host ("  Reliability            : {0}" -f (& $fmtScore $rel     'Reliability')) -ForegroundColor White
+    Write-Host ("  Security Posture       : {0}" -f (& $fmtScore $sec     'Security'))    -ForegroundColor White
+    Write-Host ("  Operational Excellence : {0}" -f (& $fmtScore $ops     'Operations'))  -ForegroundColor White
+    Write-Host ("  Performance Efficiency : {0}" -f (& $fmtScore $perf    'Performance')) -ForegroundColor White
     Write-Host ''
-    Write-Host ("  Overall Score          : {0}" -f (& $fmtScore $overall)) -ForegroundColor Cyan
+    Write-Host ("  Overall Score          : {0}" -f (& $fmtScore $overall $null))         -ForegroundColor Cyan
 
     # Render HTML
     $html = New-HtmlReport
