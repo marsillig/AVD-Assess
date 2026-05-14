@@ -127,8 +127,11 @@ $script:CheckCatalog = @{
     }
 
     StartVmOnConnect = [PSCustomObject]@{
-        Name        = 'Start VM on Connect (Personal Host Pools)'
-        Remediation = 'Enable Start VM on Connect on all personal host pools. This ensures personal VMs are only running when users need them, rather than 24/7. Combine with an auto-shutdown schedule for maximum savings. A personal VM running 24/7 costs approximately 3x more than one using Start VM on Connect with an 8-hour working day pattern.'
+        Name        = 'Start VM on Connect'
+        # Microsoft Learn now explicitly supports Start VM on Connect on both
+        # personal and pooled host pools. The cost / availability tradeoffs
+        # differ - hence the per-pool-type remediation guidance below.
+        Remediation = 'Enable Start VM on Connect on every host pool where users may connect outside scheduled hours. Personal host pools: enabling it avoids running each user''s VM 24/7 (approximately 3x cost reduction for a typical 8-hour working day pattern) - combine with an auto-shutdown schedule for the largest saving. Pooled host pools: the primary capacity tool is a scaling plan, but Start VM on Connect is the off-hours safety net - without it, a user connecting after the scaling plan has scaled down to zero sees "no resources available" until an admin intervenes. Pooled pools that already have a comprehensive scaling plan can leave Start VM on Connect off without significant risk; pools with no scaling plan should always have it on.'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/start-virtual-machine-connect'
     }
 
@@ -193,7 +196,11 @@ $script:CheckCatalog = @{
 
     EntraIdJoin = [PSCustomObject]@{
         Name        = 'Entra ID Join Status'
-        Remediation = 'Evaluate migrating new host pool deployments to Entra ID join. This eliminates line-of-sight dependency on domain controllers, simplifies the identity architecture, and enables Conditional Access at the session level. Note: FSLogix profiles, MSIX App Attach, and some legacy applications may require additional planning for Entra ID join scenarios.'
+        # The "Entra ID join is recommended" advice is true but depends on the
+        # identity model - hybrid-identity FSLogix support is GA while
+        # cloud-only / external identity FSLogix support is still in preview.
+        # Surface the matrix so admins can pick the right path for their tenant.
+        Remediation = 'Entra ID join is the supported architecture for new AVD deployments and removes line-of-sight dependency on on-premises domain controllers. The right path depends on your identity model: (1) Hybrid identities (AD DS synced to Entra) - Entra-joined session hosts with FSLogix profiles on Azure Files are fully GA-supported via Microsoft Entra Kerberos; this is the right target for most enterprises today. (2) Cloud-only or external identities - FSLogix on Azure Files for Entra-joined session hosts is currently in public preview, so usable for testing but not for production workloads that need a support SLA. Also factor in MSIX App Attach and any legacy line-of-business applications that require domain-joined behaviour. Migrating an existing hybrid- or domain-joined pool is non-trivial - typically done by deploying a new Entra-joined pool alongside and draining users across.'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/deploy-azure-ad-joined-vm'
     }
 
@@ -542,8 +549,8 @@ function Initialize-DryRunData {
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'StartVmOnConnect'
-    Add-CheckResult -Category Cost -CheckName $m.Name -Status Warning -Score 40 `
-        -Finding '1 of 2 personal host pool(s) have Start VM on Connect disabled: hp-personal-exec.' `
+    Add-CheckResult -Category Cost -CheckName $m.Name -Status Warning -Score 60 `
+        -Finding '1 personal pool(s) with Start VM on Connect disabled (VMs running 24/7): hp-personal-exec; 1 pooled pool(s) with Start VM on Connect disabled AND no scaling plan (no off-hours startup path): hp-dev-pooled-01; 1 additional pooled pool(s) have it disabled but are covered by a scaling plan (acceptable).' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'UnhealthyHostsInRotation'
@@ -605,7 +612,7 @@ function Initialize-DryRunData {
 
     $m = Get-Check 'EntraIdJoin'
     Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
-        -Finding '3 of 5 session host VM(s) appear to be hybrid-joined or domain-joined only (AADLoginForWindows extension not detected).' `
+        -Finding '2 of 5 session host VM(s) are Entra ID joined (40%); the remaining 3 appear hybrid-joined or domain-joined only (AADLoginForWindows extension not detected). Whether Entra ID join is the right target for this environment depends on the identity model - see Remediation for the support matrix.' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'DefenderForCloudCoverage'
@@ -1188,22 +1195,60 @@ function Invoke-CostChecks {
         }
     }
 
-    # Check 2: Start VM on Connect (Personal)
+    # Check 2: Start VM on Connect (both pool types - per Microsoft Learn,
+    # supported on personal AND pooled host pools).
+    # Scoring tiers:
+    #   - Personal pool, SVoC off    -> critical violation (running 24/7)
+    #   - Pooled pool, SVoC off, no scaling plan -> critical (no off-hours path)
+    #   - Pooled pool, SVoC off, has scaling plan -> acceptable (scaling plan
+    #     covers ramp-up; SVoC would be a useful complement but not required)
     $m = Get-Check 'StartVmOnConnect'
-    if ($script:personalHostPools.Count -eq 0) {
+    $totalPools = $script:personalHostPools.Count + $script:pooledHostPools.Count
+    if ($totalPools -eq 0) {
         Add-CheckResult -Category Cost -CheckName $m.Name -Status Info -Score 100 `
-            -Finding 'No personal host pools found. Start VM on Connect applies to personal host pools.' `
+            -Finding 'No host pools in scope.' `
             -Remediation 'No action required.' -LearnMore $m.LearnMore
     } else {
-        $offPools = @($script:personalHostPools | Where-Object { -not $_.StartVMOnConnect })
-        if ($offPools.Count -eq 0) {
+        # Build a case-insensitive set of pooled host pool ARM IDs that have
+        # at least one scaling plan covering them.
+        $coveredByScalingPlan = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($plan in $script:allScalingPlans) {
+            foreach ($ref in @($plan.HostPoolReference)) {
+                if ($ref.HostPoolArmPath) { [void]$coveredByScalingPlan.Add($ref.HostPoolArmPath) }
+            }
+        }
+
+        $personalOff      = @($script:personalHostPools | Where-Object { -not $_.StartVMOnConnect })
+        $pooledOffNoScale = @($script:pooledHostPools   | Where-Object { (-not $_.StartVMOnConnect) -and (-not $coveredByScalingPlan.Contains($_.Id)) })
+        $pooledOffScale   = @($script:pooledHostPools   | Where-Object { (-not $_.StartVMOnConnect) -and ($coveredByScalingPlan.Contains($_.Id)) })
+
+        $critical = $personalOff.Count + $pooledOffNoScale.Count
+
+        if ($critical -eq 0) {
+            $note = if ($pooledOffScale.Count -gt 0) {
+                $names = ($pooledOffScale | ForEach-Object { $_.Name }) -join ', '
+                (" {0} pooled pool(s) have Start VM on Connect disabled but are covered by a scaling plan, which provides ramp-up capacity (acceptable trade-off): {1}." -f $pooledOffScale.Count, $names)
+            } else { '' }
             Add-CheckResult -Category Cost -CheckName $m.Name -Status Pass -Score 100 `
-                -Finding ("All {0} personal host pool(s) have Start VM on Connect enabled." -f $script:personalHostPools.Count) `
+                -Finding ("All {0} host pool(s) have appropriate Start VM on Connect / scaling coverage.{1}" -f $totalPools, $note) `
                 -Remediation '' -LearnMore $m.LearnMore
         } else {
-            $names = ($offPools | ForEach-Object { $_.Name }) -join ', '
-            Add-CheckResult -Category Cost -CheckName $m.Name -Status Warning -Score 40 `
-                -Finding ("{0} of {1} personal host pool(s) have Start VM on Connect disabled: {2}." -f $offPools.Count, $script:personalHostPools.Count, $names) `
+            $pct = [int][math]::Round((($totalPools - $critical) / $totalPools) * 100)
+            $parts = [System.Collections.Generic.List[string]]::new()
+            if ($personalOff.Count -gt 0) {
+                $names = ($personalOff | ForEach-Object { $_.Name }) -join ', '
+                $parts.Add(("{0} personal pool(s) with Start VM on Connect disabled (VMs running 24/7): {1}" -f $personalOff.Count, $names))
+            }
+            if ($pooledOffNoScale.Count -gt 0) {
+                $names = ($pooledOffNoScale | ForEach-Object { $_.Name }) -join ', '
+                $parts.Add(("{0} pooled pool(s) with Start VM on Connect disabled AND no scaling plan (no off-hours startup path): {1}" -f $pooledOffNoScale.Count, $names))
+            }
+            if ($pooledOffScale.Count -gt 0) {
+                $parts.Add(("{0} additional pooled pool(s) have it disabled but are covered by a scaling plan (acceptable)" -f $pooledOffScale.Count))
+            }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Cost -CheckName $m.Name -Status $status -Score $pct `
+                -Finding (($parts -join '; ') + '.') `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
@@ -1542,7 +1587,9 @@ function Invoke-SecurityChecks {
         }
     }
 
-    # Check 12: Entra ID join (Info only)
+    # Check 12: Entra ID join (informational - the right answer depends on
+    # the identity model, so don't pass/fail the environment, just surface
+    # the current state and the support matrix in the remediation).
     $m = Get-Check 'EntraIdJoin'
     if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
         Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
@@ -1557,11 +1604,12 @@ function Invoke-SecurityChecks {
         $other = $script:allVMs.Count - $entra.Count
         if ($other -eq 0) {
             Add-CheckResult -Category Security -CheckName $m.Name -Status Pass -Score 100 `
-                -Finding ("All {0} session host VM(s) appear to be Entra ID joined." -f $script:allVMs.Count) `
+                -Finding ("All {0} session host VM(s) are Entra ID joined." -f $script:allVMs.Count) `
                 -Remediation '' -LearnMore $m.LearnMore
         } else {
+            $entraPct = [int][math]::Round(($entra.Count / $script:allVMs.Count) * 100)
             Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
-                -Finding ("{0} of {1} session host VM(s) appear to be hybrid-joined or domain-joined only (AADLoginForWindows extension not detected). Entra ID join is the recommended approach for new AVD deployments." -f $other, $script:allVMs.Count) `
+                -Finding ("{0} of {1} session host VM(s) are Entra ID joined ({2}%); the remaining {3} appear hybrid-joined or domain-joined only (AADLoginForWindows extension not detected). Whether Entra ID join is the right target for this environment depends on the identity model - see Remediation for the support matrix." -f $entra.Count, $script:allVMs.Count, $entraPct, $other) `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
