@@ -966,9 +966,20 @@ function Get-AvdEnvironmentData {
                 $diskEphemeral++
                 continue
             }
+            # Get-AzDisk doesn't accept -ResourceId; only -ResourceGroupName + -DiskName.
+            # Parse the disk ARM ID into those parts.
+            $diskParts = $diskId -split '/'
+            if ($diskParts.Count -lt 9) {
+                if ($diskErrors.Count -lt 3) {
+                    $diskErrors.Add(('{0}: unparseable disk ID ({1})' -f $vm.Name, $diskId))
+                }
+                continue
+            }
+            $diskRg   = Get-RgFromArmId -ResourceId $diskId
+            $diskName = $diskParts[-1]
             try {
-                $disk = Invoke-WithRetry -OperationName "Get-AzDisk ($($vm.Name))" -ScriptBlock {
-                    Get-AzDisk -ResourceId $diskId -ErrorAction Stop
+                $disk = Invoke-WithRetry -OperationName "Get-AzDisk ($diskName)" -ScriptBlock {
+                    Get-AzDisk -ResourceGroupName $diskRg -DiskName $diskName -ErrorAction Stop
                 }
                 if ($disk) {
                     $script:vmOsDisks[$vm.Id] = $disk
