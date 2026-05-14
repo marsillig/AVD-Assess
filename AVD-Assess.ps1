@@ -53,6 +53,15 @@
     '*fslogix*' (case-insensitive). Set to an empty string to disable
     name-pattern discovery.
 
+.PARAMETER OutputFormat
+    Which report format(s) to emit. 'HTML' (default) writes the self-contained
+    HTML report as before. 'JSON' writes a structured JSON document with the
+    same checks, scores, and metadata - suitable for trend tracking, CI/CD
+    gates, or piping into dashboards. 'Both' writes both files using the
+    same basename. When -OutputPath is supplied, the extension is swapped to
+    match the format being written (so a .json file is written alongside the
+    requested .html, etc.).
+
 .EXAMPLE
     .\AVD-Assess.ps1
     Run against all host pools in the current Az context.
@@ -86,12 +95,17 @@ param(
     [switch]$DryRun,
     [string]$FSLogixStorageAccount,
     [string]$FSLogixTagName    = 'FSLogixStorageAccount',
-    [string]$FSLogixNamePattern = '*fslogix*'
+    [string]$FSLogixNamePattern = '*fslogix*',
+
+    [ValidateSet('HTML','JSON','Both')]
+    [string]$OutputFormat = 'HTML'
 )
 
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion = '2.0.0-alpha.1'
+$script:ToolVersion       = '2.0.0-alpha.1'
+$script:JsonSchemaVersion = '1.0'   # Bump major on breaking changes, minor on additive changes.
+                                    # -CompareTo (T2) refuses to diff incompatible major versions.
 $script:ProjectUrl  = 'https://github.com/waynebellows/AVD-Assess'
 $script:WebsiteUrl  = 'https://modern-euc.com'
 $script:RequiredModules = @(
@@ -293,6 +307,19 @@ function Get-Check {
         throw "Unknown check ID '$Id'. Catalog keys: $(($script:CheckCatalog.Keys | Sort-Object) -join ', ')"
     }
     return $script:CheckCatalog[$Id]
+}
+
+# Reverse map: display Name -> catalog Key. Used by the JSON report to stamp
+# each check with its stable ID without forcing every Add-CheckResult callsite
+# to pass the ID explicitly. Built once at startup; asserts uniqueness so a
+# future name collision surfaces immediately rather than producing wrong IDs.
+$script:CheckIdByName = @{}
+foreach ($key in $script:CheckCatalog.Keys) {
+    $entryName = $script:CheckCatalog[$key].Name
+    if ($script:CheckIdByName.ContainsKey($entryName)) {
+        throw "Duplicate check Name '$entryName' in CheckCatalog (keys: $($script:CheckIdByName[$entryName]), $key). Names must be unique so JSON output can derive a stable check ID."
+    }
+    $script:CheckIdByName[$entryName] = $key
 }
 
 # ==============================================================================
@@ -2258,6 +2285,73 @@ $($rows.ToString())
 "@
 }
 
+function New-JsonReport {
+    # Emits the structured machine-readable report alongside (or instead of)
+    # the HTML. Schema is intentionally additive-friendly: consumers should
+    # ignore unknown fields, and we bump schemaVersion's minor when adding
+    # fields, major only on removals / renames. -CompareTo (T2) reads the
+    # schemaVersion to refuse incompatible diffs.
+    #
+    # Null is used (not 0 or 100) for category / overall scores when no
+    # scorable checks exist, matching the HTML report's N/A treatment.
+    $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+    $envObj = [ordered]@{
+        subscriptionId    = $script:Context.SubscriptionId
+        subscriptionName  = $script:Context.SubscriptionName
+        tenantId          = $script:Context.TenantId
+        hostPoolCount     = if ($null -ne $script:HostPoolCount)    { [int]$script:HostPoolCount }    else { 0 }
+        sessionHostCount  = if ($null -ne $script:SessionHostCount) { [int]$script:SessionHostCount } else { 0 }
+        scalingPlanCount  = if ($null -ne $script:ScalingPlanCount) { [int]$script:ScalingPlanCount } else { 0 }
+        vmCount           = if ($null -ne $script:VmCount)          { [int]$script:VmCount }          else { 0 }
+    }
+
+    $scoresObj = [ordered]@{
+        overall    = Get-OverallScore
+        categories = [ordered]@{
+            Cost        = Get-CategoryScore 'Cost'
+            Reliability = Get-CategoryScore 'Reliability'
+            Security    = Get-CategoryScore 'Security'
+            Operations  = Get-CategoryScore 'Operations'
+            Performance = Get-CategoryScore 'Performance'
+        }
+    }
+
+    $checks = foreach ($c in $script:Checks) {
+        # Reverse-lookup the stable catalog key from the display name. Falls
+        # back to the display name (stripped to a kebab-style slug) only if
+        # the check isn't in the catalog - which today can't happen, but the
+        # fallback keeps the output well-formed if a future check sneaks past.
+        $id = if ($script:CheckIdByName.ContainsKey($c.CheckName)) {
+            $script:CheckIdByName[$c.CheckName]
+        } else {
+            ($c.CheckName -replace '[^A-Za-z0-9]+', '')
+        }
+        [ordered]@{
+            id          = $id
+            category    = $c.Category
+            name        = $c.CheckName
+            status      = $c.Status
+            score       = [int]$c.Score
+            finding     = $c.Finding
+            remediation = $c.Remediation
+            learnMore   = $c.LearnMore
+        }
+    }
+
+    $envelope = [ordered]@{
+        tool          = 'AVD-Assess'
+        version       = $script:ToolVersion
+        schemaVersion = $script:JsonSchemaVersion
+        generatedAt   = $now
+        environment   = $envObj
+        scores        = $scoresObj
+        checks        = @($checks)
+    }
+
+    return ($envelope | ConvertTo-Json -Depth 10)
+}
+
 function New-HtmlReport {
     $overall = Get-OverallScore
     $overallDonut = New-DonutSvg -Score $overall -Size 140
@@ -2639,9 +2733,11 @@ function Invoke-Main {
     Write-Host ''
     Write-Host ("  Overall Score          : {0}" -f (& $fmtScore $overall $null))         -ForegroundColor Cyan
 
-    # Render HTML
-    $html = New-HtmlReport
-
+    # Determine which formats to write and resolve the output paths.
+    # -OutputPath supplies the base; we use [IO.Path]::ChangeExtension so
+    # passing -OutputPath C:\Reports\avd.html with -OutputFormat JSON writes
+    # C:\Reports\avd.json, and -OutputFormat Both writes both .html and .json
+    # next to each other.
     if (-not $OutputPath) {
         $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
         $OutputPath = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Report-$stamp.html"
@@ -2650,15 +2746,34 @@ function Invoke-Main {
     if ($outDir -and -not (Test-Path $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
-    [System.IO.File]::WriteAllText($OutputPath, $html, [System.Text.UTF8Encoding]::new($false))
+
+    $htmlPath  = [System.IO.Path]::ChangeExtension($OutputPath, '.html')
+    $jsonPath  = [System.IO.Path]::ChangeExtension($OutputPath, '.json')
+    $writeHtml = ($OutputFormat -eq 'HTML' -or $OutputFormat -eq 'Both')
+    $writeJson = ($OutputFormat -eq 'JSON' -or $OutputFormat -eq 'Both')
 
     Write-Host ''
-    Write-Host ("  Report saved to: {0}" -f $OutputPath) -ForegroundColor Green
+
+    if ($writeHtml) {
+        $html = New-HtmlReport
+        [System.IO.File]::WriteAllText($htmlPath, $html, [System.Text.UTF8Encoding]::new($false))
+        Write-Host ("  HTML report saved to: {0}" -f $htmlPath) -ForegroundColor Green
+    }
+    if ($writeJson) {
+        $json = New-JsonReport
+        [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.UTF8Encoding]::new($false))
+        Write-Host ("  JSON report saved to: {0}" -f $jsonPath) -ForegroundColor Green
+    }
+
     Write-Host ''
 
     if ($OpenReport) {
-        try { Start-Process -FilePath $OutputPath | Out-Null }
-        catch { Write-Host "  (Could not open report automatically: $($_.Exception.Message))" -ForegroundColor Yellow }
+        if ($writeHtml) {
+            try { Start-Process -FilePath $htmlPath | Out-Null }
+            catch { Write-Host "  (Could not open report automatically: $($_.Exception.Message))" -ForegroundColor Yellow }
+        } else {
+            Write-Host '  (-OpenReport ignored: no HTML report was written. Use -OutputFormat HTML or Both.)' -ForegroundColor Yellow
+        }
     }
 }
 
