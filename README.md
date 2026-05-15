@@ -1,6 +1,6 @@
 # AVD-Assess
 
-**A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 25 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance.
+**A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 25 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance. Optionally emits machine-readable JSON, compares a run to a previous one to show whether scores are improving, and sweeps every accessible subscription in a single pass.
 
 ## Why this exists
 
@@ -76,7 +76,10 @@ Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `av
 |---|---|---|
 | `-SubscriptionId` | Azure subscription ID to assess. Falls back to the current Az context. | `00000000-0000-0000-0000-000000000000` |
 | `-TenantId` | Azure tenant ID. Falls back to the current Az context. | `11111111-1111-1111-1111-111111111111` |
-| `-OutputPath` | Path for the HTML report. Defaults to the current directory with a timestamp. | `C:\Reports\avd.html` |
+| `-OutputPath` | Path for the report. Defaults to the current directory with a timestamp. In sweep mode this is the output **directory**. | `C:\Reports\avd.html` |
+| `-OutputFormat` | `HTML` (default), `JSON`, or `Both`. JSON is a structured, machine-readable document for trend tracking, CI/CD gates, or dashboards. | `Both` |
+| `-CompareTo` | Path to a JSON report from a previous run. Annotates every score (overall, per-category, per-check) with its movement since that run, flags new checks, and lists checks no longer assessed. | `.\AVD-Assess-Report-20260401-090000.json` |
+| `-AllAccessibleSubscriptions` | Sweep every enabled subscription the signed-in identity can see. Writes one report pair per subscription plus an `index.html` roll-up. | *switch* |
 | `-HostPoolName` | Scope the assessment to a single host pool (requires `-ResourceGroupName`). | `hp-prod-pooled-01` |
 | `-ResourceGroupName` | Scope the assessment to a specific resource group. | `rg-avd-prod` |
 | `-UseExistingConnection` | Skip `Connect-AzAccount` and use the existing Az context. Useful for automation. | *switch* |
@@ -96,6 +99,35 @@ The FSLogix Region Colocation and Profile Redundancy checks need to know which s
 
 If none match, both FSLogix checks return `Info`. The finding text records which method matched so you can tell whether the result was auto-detected or supplied.
 
+## JSON output & trend tracking
+
+`-OutputFormat JSON` (or `Both`) writes a structured `*.json` document alongside (or instead of) the HTML — the same checks, scores, and metadata in a stable, versioned schema suitable for dashboards, CI/CD gates, or diffing over time.
+
+```powershell
+# HTML + JSON in one run
+./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd.html
+
+# Later, show how every score has moved since that run
+./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd.json
+```
+
+With `-CompareTo`, the HTML report and console show a movement badge next to every score — overall, per-category, and per-check (`▲ +5` improved, `▼ −3` regressed, `=` unchanged). Checks that didn't exist in the baseline are flagged **new**; checks present in the baseline but no longer produced are listed in a **No longer assessed** section so a dropped check is never silently lost. The JSON gains `comparedTo`, `scores.delta`, per-check `delta`/`isNew`, and a `removedChecks` array.
+
+The JSON envelope carries a `schemaVersion` (semver: minor = additive, major = breaking). `-CompareTo` refuses to diff across incompatible **major** versions with a clear message rather than producing meaningless deltas — a baseline from an older minor schema still diffs cleanly.
+
+## Multi-subscription sweep
+
+Most enterprise AVD estates span several subscriptions (prod / dev / DR). `-AllAccessibleSubscriptions` assesses every enabled subscription the signed-in identity can see in one pass:
+
+```powershell
+./AVD-Assess.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
+```
+
+- Each subscription gets a pre-flight access probe; one it can't read is **skipped** (and listed with the reason) rather than aborting the whole sweep.
+- One HTML/JSON report pair is written per assessed subscription, plus an `index.html` roll-up grouping subscriptions into **Assessed** (score, linked to the detailed report, sorted lowest-first), **Empty** (accessible but no AVD), and **Skipped**.
+- `-OutputPath` is treated as the output **directory** (default `.\AVD-Assess-Sweep-<timestamp>`); `-OpenReport` opens the index.
+- Cannot be combined with `-SubscriptionId`, `-HostPoolName`, `-ResourceGroupName`, `-CompareTo`, or `-DryRun` (rejected up front with a clear message).
+
 ## Examples
 
 ```powershell
@@ -113,6 +145,15 @@ If none match, both FSLogix checks return `Info`. The finding text records which
 
 # FSLogix storage isn't tagged or name-matched - override for this run
 ./AVD-Assess.ps1 -UseExistingConnection -OpenReport -FSLogixStorageAccount stfslogixprod
+
+# HTML + machine-readable JSON
+./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd.html
+
+# Trend: compare this run to a previous JSON report
+./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd.json
+
+# Sweep every accessible subscription into a dated folder
+./AVD-Assess.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both -OpenReport
 ```
 
 ## How the scoring works

@@ -4,18 +4,24 @@ Thanks for your interest in improving AVD-Assess. This is a single-file PowerShe
 
 ## Adding a new check
 
-Every check lives inside `AVD-Assess.ps1` and registers its outcome by calling `Add-CheckResult`. The data model is:
+Every check lives inside `AVD-Assess.ps1` and registers its outcome by calling `Add-CheckResult`. Display name, remediation, and Learn URL are **not** inlined at the call site — they live once in the `$script:CheckCatalog` hashtable, keyed by a stable check ID, and are read by both the real check and the dry-run seeder. Adding a check is a three-step sequence:
 
-```powershell
-Add-CheckResult `
-    -Category    'Cost' `                # Cost | Reliability | Security | Operations
-    -CheckName   'Scaling Plan Coverage' `
-    -Status      'Pass' `                # Pass | Warning | Fail | Info
-    -Score       100 `                   # 0-100
-    -Finding     'What was found, with specific counts / names.' `
-    -Remediation 'What to do about it, with concrete steps.' `
-    -LearnMore   'https://learn.microsoft.com/...'
-```
+1. **Register it in `$script:CheckCatalog`** under a new ID (e.g. `ScalingPlanCoverage`) with `Name`, `Remediation`, and `LearnMore`.
+2. **Write the check function**, calling `Add-CheckResult` and pulling the catalogued strings:
+
+   ```powershell
+   Add-CheckResult `
+       -Category    'Cost' `                                       # Cost | Reliability | Security | Operations | Performance
+       -CheckName   $script:CheckCatalog.ScalingPlanCoverage.Name `
+       -Status      'Pass' `                                        # Pass | Warning | Fail | Info
+       -Score       100 `                                           # 0-100; Info checks always 100, excluded from averages
+       -Finding     'What was found, with specific counts / names.' `
+       -Remediation $script:CheckCatalog.ScalingPlanCoverage.Remediation `
+       -LearnMore   $script:CheckCatalog.ScalingPlanCoverage.LearnMore
+   ```
+3. **Seed it in `Initialize-DryRunData`** so `-DryRun` renders a synthetic result for the new check.
+
+The catalog ID also becomes the check's stable `id` in JSON output and the key `-CompareTo` matches on across runs — so keep IDs stable once shipped (renaming an ID makes the check look "new" and the old one "no longer assessed" in a diff). A new check is automatically additive to the JSON schema; only bump `$script:JsonSchemaVersion` (minor for additive envelope fields, major for removals/renames) if you change the JSON *structure*, not when adding a check.
 
 Rules of thumb for new checks:
 
@@ -38,7 +44,7 @@ Rules of thumb for new checks:
    ```powershell
    ./AVD-Assess.ps1 -DryRun -OutputPath ./_dryrun.html -OpenReport
    ```
-   This seeds synthetic results for all 16 checks and produces a full report without hitting Azure. Useful for verifying UI changes and new categories/statuses.
+   This seeds synthetic results for all 25 checks and produces a full report without hitting Azure. Useful for verifying UI changes and new categories/statuses. Add `-OutputFormat Both` to also exercise the JSON writer, and `-CompareTo <previous.json>` to verify delta rendering.
 3. **Run against a real subscription** with a varied configuration (mix of pooled / personal, scaling plans present / absent, healthy / unhealthy hosts). Ideally a dev subscription — this tool is read-only but you should still scope carefully.
 
 ## Pull request guidelines
@@ -47,7 +53,7 @@ Rules of thumb for new checks:
 - **Include test evidence** — a screenshot of the new report section, or the relevant console output.
 - **Explain the Pass / Warning / Fail thresholds** in the PR description, especially for any proportional scoring.
 - **Match the existing style** — 4-space indentation, `Verb-Noun` function names, comment-based help on functions, banner comments separating major sections.
-- **No new module dependencies** beyond the five Az modules already required.
+- **No new module dependencies** beyond the eight Az modules already required (`Az.Accounts`, `Az.DesktopVirtualization`, `Az.Compute`, `Az.Monitor`, `Az.Resources`, `Az.Network`, `Az.Storage`, `Az.Security`).
 - **Keep the single-file structure.** Do not split into modules, dot-sourced files, or sub-folders.
 
 ## Reporting issues
