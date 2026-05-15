@@ -62,9 +62,25 @@
     match the format being written (so a .json file is written alongside the
     requested .html, etc.).
 
+.PARAMETER CompareTo
+    Path to a JSON report from a previous run (produced by -OutputFormat JSON
+    or Both). When supplied, every score - overall, per-category, and
+    per-check - is annotated with its movement since that run: an upward
+    delta when the score improved, a downward delta when it regressed, or
+    "no change". Checks that did not exist in the previous run are flagged
+    as new; checks present in the previous run but no longer assessed are
+    listed separately so a dropped check is never silently lost. The
+    baseline's schemaVersion is checked first - a major-version mismatch
+    aborts with a clear message rather than silently producing wrong deltas.
+
 .EXAMPLE
     .\AVD-Assess.ps1
     Run against all host pools in the current Az context.
+
+.EXAMPLE
+    .\AVD-Assess.ps1 -OutputFormat Both -CompareTo .\AVD-Assess-Report-20260401-090000.json
+    Assess the environment and show how every score has moved since the
+    1 April baseline, in both the HTML and JSON reports.
 
 .EXAMPLE
     .\AVD-Assess.ps1 -SubscriptionId "00000000-0000-0000-0000-000000000000" -OpenReport
@@ -98,14 +114,21 @@ param(
     [string]$FSLogixNamePattern = '*fslogix*',
 
     [ValidateSet('HTML','JSON','Both')]
-    [string]$OutputFormat = 'HTML'
+    [string]$OutputFormat = 'HTML',
+
+    [string]$CompareTo
 )
 
 $ErrorActionPreference = 'Stop'
 
 $script:ToolVersion       = '2.0.0-alpha.1'
-$script:JsonSchemaVersion = '1.0'   # Bump major on breaking changes, minor on additive changes.
-                                    # -CompareTo (T2) refuses to diff incompatible major versions.
+$script:JsonSchemaVersion = '1.1'   # Bump major on breaking changes, minor on additive changes.
+                                    # 1.1 adds the optional `comparedTo`, `scores.delta`,
+                                    # per-check `delta`, and `removedChecks` fields emitted
+                                    # only when -CompareTo is supplied (additive - consumers
+                                    # ignore unknown fields). -CompareTo refuses to diff
+                                    # incompatible *major* versions, so a 1.0 baseline still
+                                    # diffs cleanly against this 1.1 build.
 $script:ProjectUrl  = 'https://github.com/waynebellows/AVD-Assess'
 $script:WebsiteUrl  = 'https://modern-euc.com'
 $script:RequiredModules = @(
@@ -2209,6 +2232,137 @@ function Get-CategoryScoredTally {
 }
 
 # ==============================================================================
+# COMPARISON  (T2 - -CompareTo)
+# ==============================================================================
+#
+# When -CompareTo points at a JSON report from a previous run, every score is
+# annotated with its movement since that run. The baseline is loaded and
+# validated up front (before the Azure collection) so an unreadable or
+# major-incompatible baseline fails fast instead of after a long run.
+
+function Get-CheckId {
+    # Stable identity for a check: its catalog key. Falls back to a slug of
+    # the display name only if the check somehow isn't in the catalog. Shared
+    # by the JSON writer and the comparison matcher so both key checks the
+    # same way.
+    param($Check)
+    if ($script:CheckIdByName.ContainsKey($Check.CheckName)) {
+        return $script:CheckIdByName[$Check.CheckName]
+    }
+    return ($Check.CheckName -replace '[^A-Za-z0-9]+', '')
+}
+
+function Import-CompareBaseline {
+    # Loads and validates the -CompareTo JSON, then populates $script:Compare.
+    # Throws a clear, actionable error on any problem - callers let it abort.
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "CompareTo baseline not found: '$Path'. Pass the path to a JSON report from a previous run (produced with -OutputFormat JSON or Both)."
+    }
+
+    try {
+        $raw  = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        $base = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "CompareTo baseline '$Path' is not valid JSON: $($_.Exception.Message)"
+    }
+
+    if (-not $base.schemaVersion) {
+        throw "CompareTo baseline '$Path' has no schemaVersion field - it does not look like an AVD-Assess JSON report."
+    }
+
+    $baseMajor = ([string]$base.schemaVersion -split '\.')[0] -as [int]
+    $curMajor  = ($script:JsonSchemaVersion    -split '\.')[0] -as [int]
+    if ($null -eq $baseMajor) {
+        throw "CompareTo baseline '$Path' has an unparseable schemaVersion '$($base.schemaVersion)'."
+    }
+    if ($baseMajor -ne $curMajor) {
+        throw ("CompareTo baseline schemaVersion {0} is incompatible with this build's schema {1} (major versions differ - the diff would be meaningless). Re-run the baseline with a matching AVD-Assess version, or omit -CompareTo." -f $base.schemaVersion, $script:JsonSchemaVersion)
+    }
+
+    $byId = @{}
+    foreach ($c in @($base.checks)) {
+        if ($c.id) { $byId[[string]$c.id] = $c }
+    }
+
+    $script:Compare = [PSCustomObject]@{
+        Path          = $Path
+        SchemaVersion = [string]$base.schemaVersion
+        GeneratedAt   = [string]$base.generatedAt
+        ToolVersion   = [string]$base.version
+        Scores        = $base.scores
+        ChecksById    = $byId
+    }
+}
+
+function Get-ScoreDelta {
+    # Current / Previous are ints or $null (N/A). Returns:
+    #   Comparable : $true only when both sides are numeric
+    #   Value      : signed int (Current - Previous) when comparable
+    #   Direction  : 'up' | 'down' | 'same' | 'na'
+    # A score is "better" when higher, so a positive Value is an improvement.
+    param($Current, $Previous)
+    if ($null -eq $Current -or $null -eq $Previous) {
+        return [PSCustomObject]@{ Comparable = $false; Value = $null; Direction = 'na' }
+    }
+    $d = [int]$Current - [int]$Previous
+    $dir = if ($d -gt 0) { 'up' } elseif ($d -lt 0) { 'down' } else { 'same' }
+    return [PSCustomObject]@{ Comparable = $true; Value = $d; Direction = $dir }
+}
+
+function Get-BaselineOverall {
+    if (-not $script:Compare) { return $null }
+    return $script:Compare.Scores.overall
+}
+
+function Get-BaselineCategoryScore {
+    # Returns the baseline category score, or $null if the baseline predates
+    # that category (e.g. a 5th-pillar-less older report) or scored it N/A.
+    param([string]$Category)
+    if (-not $script:Compare) { return $null }
+    $cats = $script:Compare.Scores.categories
+    if (-not $cats) { return $null }
+    return $cats.$Category
+}
+
+function Get-RemovedBaselineChecks {
+    # Baseline checks whose id is no longer produced by this run - surfaced in
+    # a dedicated section so a dropped check is never silently lost.
+    if (-not $script:Compare) { return @() }
+    $currentIds = @{}
+    foreach ($c in $script:Checks) { $currentIds[[string](Get-CheckId $c)] = $true }
+    $removed = foreach ($id in $script:Compare.ChecksById.Keys) {
+        if (-not $currentIds.ContainsKey($id)) { $script:Compare.ChecksById[$id] }
+    }
+    return @($removed)
+}
+
+function New-DeltaBadgeHtml {
+    # Inline movement badge for a numeric delta, or '' when no comparison is
+    # active or either side is N/A.
+    param($Delta)
+    if (-not $script:Compare -or $null -eq $Delta -or -not $Delta.Comparable) { return '' }
+    switch ($Delta.Direction) {
+        'up'   { return ('<span class="delta delta-up" title="Improved since baseline">&#9650;&#160;+{0}</span>' -f $Delta.Value) }
+        'down' { return ('<span class="delta delta-down" title="Regressed since baseline">&#9660;&#160;{0}</span>' -f $Delta.Value) }
+        default { return '<span class="delta delta-same" title="No change since baseline">= 0</span>' }
+    }
+}
+
+function Format-DeltaConsole {
+    # Compact ' (+5)' / ' (-3)' / ' (=)' suffix for console score lines.
+    # Plain ASCII on purpose - the Windows console is not reliably Unicode.
+    param($Delta)
+    if (-not $script:Compare -or $null -eq $Delta -or -not $Delta.Comparable) { return '' }
+    switch ($Delta.Direction) {
+        'up'   { return (' (+{0})' -f $Delta.Value) }
+        'down' { return (' ({0})'  -f $Delta.Value) }
+        default { return ' (=)' }
+    }
+}
+
+# ==============================================================================
 # HTML REPORT
 # ==============================================================================
 
@@ -2228,6 +2382,7 @@ function New-CategoryCardHtml {
     $tallyHtml = if ($null -ne $score -and $tally.Scored -lt $tally.Total) {
         ('<div class="cat-scored-tally">{0} of {1} scored</div>' -f $tally.Scored, $tally.Total)
     } else { '' }
+    $catDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $score -Previous (Get-BaselineCategoryScore $Category))
     $checks = @($script:Checks | Where-Object { $_.Category -eq $Category })
 
     $rows = [System.Text.StringBuilder]::new()
@@ -2235,6 +2390,20 @@ function New-CategoryCardHtml {
         $cls    = Get-StatusClass -Status $c.Status
         $label  = Get-StatusSymbol -Status $c.Status
         $name   = ConvertTo-HtmlSafe $c.CheckName
+        # Movement badge for this check: '(new)' when it didn't exist in the
+        # baseline, otherwise the score delta. Empty when no comparison.
+        $checkBadge = ''
+        if ($script:Compare) {
+            $cid  = [string](Get-CheckId $c)
+            $prev = $script:Compare.ChecksById[$cid]
+            if (-not $prev) {
+                if ($script:Compare.ChecksById.Count -gt 0) {
+                    $checkBadge = '<span class="badge-new" title="Not assessed in the baseline run">new</span>'
+                }
+            } else {
+                $checkBadge = New-DeltaBadgeHtml (Get-ScoreDelta -Current ([int]$c.Score) -Previous $prev.score)
+            }
+        }
         $find   = ConvertTo-HtmlSafe $c.Finding
         $rem    = ConvertTo-HtmlSafe $c.Remediation
         $learn  = ''
@@ -2258,7 +2427,7 @@ function New-CategoryCardHtml {
   <div class="check-row" onclick="this.classList.toggle('expanded')">
     <div class="check-head">
       <span class="check-name">$name</span>
-      <span class="status $cls">$label</span>
+      <span class="check-badges">$checkBadge<span class="status $cls">$label</span></span>
     </div>
     <div class="check-detail">
       <div class="finding">$find</div>
@@ -2274,7 +2443,7 @@ $remBlock
     $donut
     <div class="category-meta">
       <div class="sub">$DisplayName</div>
-      <div class="cat-score">$scoreHtml</div>
+      <div class="cat-score">$scoreHtml $catDeltaHtml</div>
       $tallyHtml
     </div>
   </div>
@@ -2306,28 +2475,35 @@ function New-JsonReport {
         vmCount           = if ($null -ne $script:VmCount)          { [int]$script:VmCount }          else { 0 }
     }
 
+    $catNames     = @('Cost','Reliability','Security','Operations','Performance')
+    $overallNow   = Get-OverallScore
+    $catScoresNow = [ordered]@{}
+    foreach ($cn in $catNames) { $catScoresNow[$cn] = Get-CategoryScore $cn }
+
     $scoresObj = [ordered]@{
-        overall    = Get-OverallScore
-        categories = [ordered]@{
-            Cost        = Get-CategoryScore 'Cost'
-            Reliability = Get-CategoryScore 'Reliability'
-            Security    = Get-CategoryScore 'Security'
-            Operations  = Get-CategoryScore 'Operations'
-            Performance = Get-CategoryScore 'Performance'
+        overall    = $overallNow
+        categories = $catScoresNow
+    }
+
+    # Additive (schema 1.1): delta keys appear only when -CompareTo is active.
+    # A null delta means the movement isn't computable (this run or the
+    # baseline scored that level N/A), distinct from a real delta of 0.
+    if ($script:Compare) {
+        $catDeltas = [ordered]@{}
+        foreach ($cn in $catNames) {
+            $cd = Get-ScoreDelta -Current $catScoresNow[$cn] -Previous (Get-BaselineCategoryScore $cn)
+            $catDeltas[$cn] = if ($cd.Comparable) { $cd.Value } else { $null }
+        }
+        $od = Get-ScoreDelta -Current $overallNow -Previous (Get-BaselineOverall)
+        $scoresObj['delta'] = [ordered]@{
+            overall    = if ($od.Comparable) { $od.Value } else { $null }
+            categories = $catDeltas
         }
     }
 
     $checks = foreach ($c in $script:Checks) {
-        # Reverse-lookup the stable catalog key from the display name. Falls
-        # back to the display name (stripped to a kebab-style slug) only if
-        # the check isn't in the catalog - which today can't happen, but the
-        # fallback keeps the output well-formed if a future check sneaks past.
-        $id = if ($script:CheckIdByName.ContainsKey($c.CheckName)) {
-            $script:CheckIdByName[$c.CheckName]
-        } else {
-            ($c.CheckName -replace '[^A-Za-z0-9]+', '')
-        }
-        [ordered]@{
+        $id = Get-CheckId $c
+        $row = [ordered]@{
             id          = $id
             category    = $c.Category
             name        = $c.CheckName
@@ -2337,6 +2513,13 @@ function New-JsonReport {
             remediation = $c.Remediation
             learnMore   = $c.LearnMore
         }
+        if ($script:Compare) {
+            $prev = $script:Compare.ChecksById[[string]$id]
+            $row['isNew'] = (-not $prev)
+            $cd = if ($prev) { Get-ScoreDelta -Current ([int]$c.Score) -Previous $prev.score } else { $null }
+            $row['delta'] = if ($cd -and $cd.Comparable) { $cd.Value } else { $null }
+        }
+        $row
     }
 
     $envelope = [ordered]@{
@@ -2347,6 +2530,26 @@ function New-JsonReport {
         environment   = $envObj
         scores        = $scoresObj
         checks        = @($checks)
+    }
+
+    if ($script:Compare) {
+        $envelope['comparedTo'] = [ordered]@{
+            file          = $script:Compare.Path
+            generatedAt   = $script:Compare.GeneratedAt
+            schemaVersion = $script:Compare.SchemaVersion
+            toolVersion   = $script:Compare.ToolVersion
+        }
+        $envelope['removedChecks'] = @(
+            foreach ($r in (Get-RemovedBaselineChecks)) {
+                [ordered]@{
+                    id       = $r.id
+                    category = $r.category
+                    name     = $r.name
+                    status   = $r.status
+                    score    = $r.score
+                }
+            }
+        )
     }
 
     return ($envelope | ConvertTo-Json -Depth 10)
@@ -2360,7 +2563,37 @@ function New-HtmlReport {
     } else {
         "$overall<span class=""suffix"">/100</span>"
     }
+    $overallDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall))
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
+
+    # Compared-to meta cell + "no longer assessed" section: rendered only when
+    # a baseline was supplied.
+    $comparedCell = ''
+    $removedHtml  = ''
+    if ($script:Compare) {
+        $baseWhen = ConvertTo-HtmlSafe $script:Compare.GeneratedAt
+        $comparedCell = "<div class=""cell""><div class=""meta-label"">Compared To</div><div class=""meta-value"">$baseWhen</div></div>"
+
+        $removed = @(Get-RemovedBaselineChecks)
+        if ($removed.Count -gt 0) {
+            $rrows = [System.Text.StringBuilder]::new()
+            foreach ($r in $removed) {
+                $rn = ConvertTo-HtmlSafe $r.name
+                $rc = ConvertTo-HtmlSafe $r.category
+                $rs = ConvertTo-HtmlSafe $r.status
+                [void]$rrows.AppendLine("    <li><span class=""removed-name"">$rn</span><span class=""removed-meta"">$rc &middot; was $rs ($($r.score)/100)</span></li>")
+            }
+            $removedHtml = @"
+  <section class="removed-section">
+    <div class="removed-title">No longer assessed</div>
+    <div class="removed-sub">$($removed.Count) check(s) present in the baseline are not produced by this run (check removed, renamed, or not applicable to this environment).</div>
+    <ul class="removed-list">
+$($rrows.ToString())
+    </ul>
+  </section>
+"@
+        }
+    }
 
     $subName = ConvertTo-HtmlSafe $script:Context.SubscriptionName
     $subId   = ConvertTo-HtmlSafe $script:Context.SubscriptionId
@@ -2566,6 +2799,60 @@ header.hero {
 .status.warn { color: #f59e0b; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.35); }
 .status.fail { color: #ef4444; background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.35); }
 .status.info { color: #33CCCC; background: rgba(51,204,204,0.12); border: 1px solid rgba(51,204,204,0.35); }
+.check-badges { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.delta {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.delta-up   { color: #22c55e; }
+.delta-down { color: #ef4444; }
+.delta-same { color: #64748b; }
+.badge-new {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #B3FF00;
+  background: rgba(179,255,0,0.10);
+  border: 1px solid rgba(179,255,0,0.35);
+}
+.cat-score .delta { font-size: 13px; margin-left: 6px; }
+.overall .big .delta { font-size: 20px; margin-left: 8px; vertical-align: middle; }
+.removed-section {
+  background: #0D2535;
+  border: 1px solid #1a3547;
+  border-radius: 16px;
+  padding: 24px 28px;
+  margin-top: 24px;
+}
+.removed-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 4px;
+}
+.removed-sub { font-size: 13px; color: #94a3b8; margin-bottom: 14px; }
+.removed-list { list-style: none; margin: 0; padding: 0; }
+.removed-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-top: 1px solid #1a3547;
+}
+.removed-name { font-size: 14px; color: #cbd5e1; }
+.removed-meta { font-size: 12px; color: #64748b; white-space: nowrap; }
 .check-detail {
   display: none;
   padding: 4px 14px 14px 14px;
@@ -2646,7 +2933,7 @@ footer a:hover { color: #B3FF00; }
       $overallDonut
       <div>
         <div class="label">Overall Score</div>
-        <div class="big">$overallHtml</div>
+        <div class="big">$overallHtml $overallDeltaHtml</div>
       </div>
     </div>
   </header>
@@ -2658,6 +2945,7 @@ footer a:hover { color: #B3FF00; }
     <div class="cell"><div class="meta-label">Host Pools</div><div class="meta-value">$($script:HostPoolCount)</div></div>
     <div class="cell"><div class="meta-label">Session Hosts</div><div class="meta-value">$($script:SessionHostCount)</div></div>
     <div class="cell"><div class="meta-label">Generated</div><div class="meta-value">$generated</div></div>
+    $comparedCell
   </div>
 
   <div class="categories">
@@ -2667,6 +2955,7 @@ footer a:hover { color: #B3FF00; }
     $cardOps
     $cardPerf
   </div>
+$removedHtml
 
   <footer>
     AVD-Assess v$script:ToolVersion &middot;
@@ -2686,6 +2975,17 @@ footer a:hover { color: #B3FF00; }
 
 function Invoke-Main {
     Write-Banner
+
+    # Validate the comparison baseline before the (potentially long) Azure
+    # collection so an unreadable or incompatible baseline fails fast.
+    $script:Compare = $null
+    if ($CompareTo) {
+        Import-CompareBaseline -Path $CompareTo
+        Write-Section 'Comparison Baseline'
+        Write-Host ("  File        : {0}" -f $script:Compare.Path)          -ForegroundColor White
+        Write-Host ("  Generated   : {0}" -f $script:Compare.GeneratedAt)   -ForegroundColor White
+        Write-Host ("  Tool / schema : {0} / {1}" -f $script:Compare.ToolVersion, $script:Compare.SchemaVersion) -ForegroundColor White
+    }
 
     if ($DryRun) {
         Initialize-DryRunData
@@ -2724,14 +3024,26 @@ function Invoke-Main {
         return $base
     }
 
+    $catD = {
+        param($cur, $cat)
+        Format-DeltaConsole (Get-ScoreDelta -Current $cur -Previous (Get-BaselineCategoryScore $cat))
+    }
+
     Write-Section 'Score Summary'
-    Write-Host ("  Cost Optimisation      : {0}" -f (& $fmtScore $cost    'Cost'))        -ForegroundColor White
-    Write-Host ("  Reliability            : {0}" -f (& $fmtScore $rel     'Reliability')) -ForegroundColor White
-    Write-Host ("  Security Posture       : {0}" -f (& $fmtScore $sec     'Security'))    -ForegroundColor White
-    Write-Host ("  Operational Excellence : {0}" -f (& $fmtScore $ops     'Operations'))  -ForegroundColor White
-    Write-Host ("  Performance Efficiency : {0}" -f (& $fmtScore $perf    'Performance')) -ForegroundColor White
+    Write-Host ("  Cost Optimisation      : {0}{1}" -f (& $fmtScore $cost 'Cost'),        (& $catD $cost 'Cost'))        -ForegroundColor White
+    Write-Host ("  Reliability            : {0}{1}" -f (& $fmtScore $rel  'Reliability'), (& $catD $rel  'Reliability')) -ForegroundColor White
+    Write-Host ("  Security Posture       : {0}{1}" -f (& $fmtScore $sec  'Security'),    (& $catD $sec  'Security'))    -ForegroundColor White
+    Write-Host ("  Operational Excellence : {0}{1}" -f (& $fmtScore $ops  'Operations'),  (& $catD $ops  'Operations'))  -ForegroundColor White
+    Write-Host ("  Performance Efficiency : {0}{1}" -f (& $fmtScore $perf 'Performance'), (& $catD $perf 'Performance')) -ForegroundColor White
     Write-Host ''
-    Write-Host ("  Overall Score          : {0}" -f (& $fmtScore $overall $null))         -ForegroundColor Cyan
+    Write-Host ("  Overall Score          : {0}{1}" -f (& $fmtScore $overall $null), (Format-DeltaConsole (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall)))) -ForegroundColor Cyan
+
+    if ($script:Compare) {
+        $newCount     = @($script:Checks | Where-Object { $script:Compare.ChecksById.Count -gt 0 -and -not $script:Compare.ChecksById.ContainsKey([string](Get-CheckId $_)) }).Count
+        $removedCount = @(Get-RemovedBaselineChecks).Count
+        Write-Host ''
+        Write-Host ("  vs baseline ({0}): {1} new check(s), {2} no longer assessed" -f $script:Compare.GeneratedAt, $newCount, $removedCount) -ForegroundColor DarkGray
+    }
 
     # Determine which formats to write and resolve the output paths.
     # -OutputPath supplies the base; we use [IO.Path]::ChangeExtension so

@@ -1,6 +1,8 @@
 # Generated reports
 AVD-Assess-Report-*.html
+AVD-Assess-Report-*.json
 _dryrun*.html
+_dryrun*.json
 *.html
 !docs/*.html
 
