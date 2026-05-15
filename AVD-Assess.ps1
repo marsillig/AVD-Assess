@@ -114,7 +114,7 @@
     Website  : https://modern-euc.com
     Project  : https://github.com/waynebellows/AVD-Assess
     License  : MIT
-    Version  : 2.0.0-alpha.1
+    Version  : 2.0.0
 #>
 
 [CmdletBinding()]
@@ -141,7 +141,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:ToolVersion       = '2.0.0-alpha.1'
+$script:ToolVersion       = '2.0.0'
 $script:JsonSchemaVersion = '1.1'   # Bump major on breaking changes, minor on additive changes.
                                     # 1.1 adds the optional `comparedTo`, `scores.delta`,
                                     # per-check `delta`, and `removedChecks` fields emitted
