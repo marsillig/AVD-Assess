@@ -946,7 +946,13 @@ function Get-AvdEnvironmentData {
     foreach ($hp in $script:allHostPools) {
         try {
             $ds = @(Invoke-WithRetry -OperationName "Get-AzDiagnosticSetting ($($hp.Name))" -ScriptBlock {
-                Get-AzDiagnosticSetting -ResourceId $hp.Id -ErrorAction Stop
+                # -WarningAction SilentlyContinue suppresses the Az.Monitor
+                # 'Upcoming breaking changes' notice this cmdlet emits on every
+                # call - it would otherwise print once per host pool (and once
+                # per subscription in a sweep), drowning the progress output.
+                # The deprecation only reshapes .Log / .Metric; this check
+                # reads .WorkspaceId, which that change does not touch.
+                Get-AzDiagnosticSetting -ResourceId $hp.Id -ErrorAction Stop -WarningAction SilentlyContinue
             })
             $script:diagnosticSettings[$hp.Id] = $ds
             $diagOk++
