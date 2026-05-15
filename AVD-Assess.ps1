@@ -73,9 +73,27 @@
     baseline's schemaVersion is checked first - a major-version mismatch
     aborts with a clear message rather than silently producing wrong deltas.
 
+.PARAMETER AllAccessibleSubscriptions
+    Sweep every enabled subscription the signed-in identity can see instead
+    of assessing a single subscription. Each subscription is probed for
+    access first; those the identity cannot read are skipped (and listed,
+    with the failure reason, in the roll-up) rather than aborting the sweep.
+    One HTML/JSON report pair is written per assessed subscription, plus an
+    index.html roll-up grouping subscriptions into Assessed (with score and
+    a link to the detailed report), Empty (no AVD resources), and Skipped
+    (probe failed). In sweep mode -OutputPath is treated as the output
+    *directory* (default: .\AVD-Assess-Sweep-<timestamp>). Cannot be combined
+    with -SubscriptionId, -HostPoolName, -ResourceGroupName, -CompareTo, or
+    -DryRun.
+
 .EXAMPLE
     .\AVD-Assess.ps1
     Run against all host pools in the current Az context.
+
+.EXAMPLE
+    .\AVD-Assess.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
+    Assess every accessible subscription, writing an HTML+JSON pair per
+    subscription and an index.html roll-up under .\AVD-Assess-Sweep-<stamp>.
 
 .EXAMPLE
     .\AVD-Assess.ps1 -OutputFormat Both -CompareTo .\AVD-Assess-Report-20260401-090000.json
@@ -116,7 +134,9 @@ param(
     [ValidateSet('HTML','JSON','Both')]
     [string]$OutputFormat = 'HTML',
 
-    [string]$CompareTo
+    [string]$CompareTo,
+
+    [switch]$AllAccessibleSubscriptions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -2973,39 +2993,10 @@ $removedHtml
 # MAIN
 # ==============================================================================
 
-function Invoke-Main {
-    Write-Banner
-
-    # Validate the comparison baseline before the (potentially long) Azure
-    # collection so an unreadable or incompatible baseline fails fast.
-    $script:Compare = $null
-    if ($CompareTo) {
-        Import-CompareBaseline -Path $CompareTo
-        Write-Section 'Comparison Baseline'
-        Write-Host ("  File        : {0}" -f $script:Compare.Path)          -ForegroundColor White
-        Write-Host ("  Generated   : {0}" -f $script:Compare.GeneratedAt)   -ForegroundColor White
-        Write-Host ("  Tool / schema : {0} / {1}" -f $script:Compare.ToolVersion, $script:Compare.SchemaVersion) -ForegroundColor White
-    }
-
-    if ($DryRun) {
-        Initialize-DryRunData
-    } else {
-        Assert-RequiredModules
-        Connect-ToAzure
-        $hasData = Get-AvdEnvironmentData
-        if (-not $hasData) {
-            Write-Host ''
-            Write-Host '  Nothing to report. Exiting.' -ForegroundColor Yellow
-            return
-        }
-        Invoke-CostChecks
-        Invoke-ReliabilityChecks
-        Invoke-SecurityChecks
-        Invoke-OperationsChecks
-        Invoke-PerformanceChecks
-    }
-
-    # Score summary
+function Write-ScoreSummaryConsole {
+    # Prints the per-category and overall score block for the assessment in
+    # $script: state. Delta annotations only appear when $script:Compare is
+    # set (single-subscription -CompareTo); in sweep mode it is always $null.
     $cost = Get-CategoryScore 'Cost'
     $rel  = Get-CategoryScore 'Reliability'
     $sec  = Get-CategoryScore 'Security'
@@ -3044,44 +3035,367 @@ function Invoke-Main {
         Write-Host ''
         Write-Host ("  vs baseline ({0}): {1} new check(s), {2} no longer assessed" -f $script:Compare.GeneratedAt, $newCount, $removedCount) -ForegroundColor DarkGray
     }
+}
 
-    # Determine which formats to write and resolve the output paths.
-    # -OutputPath supplies the base; we use [IO.Path]::ChangeExtension so
-    # passing -OutputPath C:\Reports\avd.html with -OutputFormat JSON writes
-    # C:\Reports\avd.json, and -OutputFormat Both writes both .html and .json
-    # next to each other.
-    if (-not $OutputPath) {
-        $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-        $OutputPath = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Report-$stamp.html"
-    }
-    $outDir = Split-Path -Parent $OutputPath
+function Save-Reports {
+    # Writes the HTML and/or JSON report for the assessment in $script: state
+    # using $BasePath as the basename (its extension is swapped per format).
+    # Returns the paths actually written. -OutputFormat governs which.
+    param([Parameter(Mandatory)][string]$BasePath)
+
+    $outDir = Split-Path -Parent $BasePath
     if ($outDir -and -not (Test-Path $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     }
 
-    $htmlPath  = [System.IO.Path]::ChangeExtension($OutputPath, '.html')
-    $jsonPath  = [System.IO.Path]::ChangeExtension($OutputPath, '.json')
+    $htmlPath  = [System.IO.Path]::ChangeExtension($BasePath, '.html')
+    $jsonPath  = [System.IO.Path]::ChangeExtension($BasePath, '.json')
     $writeHtml = ($OutputFormat -eq 'HTML' -or $OutputFormat -eq 'Both')
     $writeJson = ($OutputFormat -eq 'JSON' -or $OutputFormat -eq 'Both')
 
-    Write-Host ''
+    $written = [PSCustomObject]@{ Html = $null; Json = $null }
 
     if ($writeHtml) {
         $html = New-HtmlReport
         [System.IO.File]::WriteAllText($htmlPath, $html, [System.Text.UTF8Encoding]::new($false))
         Write-Host ("  HTML report saved to: {0}" -f $htmlPath) -ForegroundColor Green
+        $written.Html = $htmlPath
     }
     if ($writeJson) {
         $json = New-JsonReport
         [System.IO.File]::WriteAllText($jsonPath, $json, [System.Text.UTF8Encoding]::new($false))
         Write-Host ("  JSON report saved to: {0}" -f $jsonPath) -ForegroundColor Green
+        $written.Json = $jsonPath
+    }
+    return $written
+}
+
+# ------------------------------------------------------------------------------
+# Multi-subscription sweep (T3)
+# ------------------------------------------------------------------------------
+
+function Get-SubSlug {
+    # Filesystem-safe slug for a subscription, used in per-sub report names.
+    # Falls back to the (always safe) subscription id if the name has no
+    # usable characters.
+    param([string]$Name, [string]$Id)
+    $slug = ($Name -replace '[^A-Za-z0-9]+', '-').Trim('-')
+    if ([string]::IsNullOrWhiteSpace($slug)) { $slug = $Id }
+    if ($slug.Length -gt 60) { $slug = $slug.Substring(0, 60).Trim('-') }
+    return $slug
+}
+
+function New-SweepIndexHtml {
+    # Roll-up landing page: Assessed (score + link), Empty (no AVD), and
+    # Skipped (probe failed, with reason). Same dark theme as the report.
+    param([object[]]$Results, [string]$GeneratedAt)
+
+    $assessed = @($Results | Where-Object { $_.Status -eq 'Assessed' } | Sort-Object { $_.Overall } )
+    $empty    = @($Results | Where-Object { $_.Status -eq 'Empty' })
+    $skipped  = @($Results | Where-Object { $_.Status -eq 'Skipped' })
+
+    $assessedRows = [System.Text.StringBuilder]::new()
+    foreach ($r in $assessed) {
+        $n = ConvertTo-HtmlSafe $r.Name
+        $i = ConvertTo-HtmlSafe $r.Id
+        if ($null -eq $r.Overall) {
+            $scoreCell = '<span class="idx-na">N/A</span>'
+        } else {
+            $col = Get-ScoreColour ([int]$r.Overall)
+            $scoreCell = ('<span class="idx-score" style="color:{0}">{1}<span class="idx-suffix">/100</span></span>' -f $col, [int]$r.Overall)
+        }
+        $link = ConvertTo-HtmlSafe $r.ReportFile
+        [void]$assessedRows.AppendLine("    <li><a class=""idx-link"" href=""$link""><span class=""idx-name"">$n</span><span class=""idx-id"">$i</span></a>$scoreCell</li>")
+    }
+    $emptyRows = [System.Text.StringBuilder]::new()
+    foreach ($r in $empty) {
+        $n = ConvertTo-HtmlSafe $r.Name; $i = ConvertTo-HtmlSafe $r.Id
+        [void]$emptyRows.AppendLine("    <li><span class=""idx-name"">$n</span><span class=""idx-id"">$i</span></li>")
+    }
+    $skippedRows = [System.Text.StringBuilder]::new()
+    foreach ($r in $skipped) {
+        $n = ConvertTo-HtmlSafe $r.Name; $i = ConvertTo-HtmlSafe $r.Id
+        $why = ConvertTo-HtmlSafe $r.Reason
+        [void]$skippedRows.AppendLine("    <li><span class=""idx-name"">$n</span><span class=""idx-id"">$i</span><span class=""idx-reason"">$why</span></li>")
     }
 
+    $sectionEmpty = if ($empty.Count -gt 0) { @"
+  <section class="idx-card">
+    <div class="idx-head">Empty <span class="idx-count">$($empty.Count)</span></div>
+    <div class="idx-sub">Accessible but no AVD host pools found.</div>
+    <ul class="idx-list">
+$($emptyRows.ToString())
+    </ul>
+  </section>
+"@ } else { '' }
+
+    $sectionSkipped = if ($skipped.Count -gt 0) { @"
+  <section class="idx-card">
+    <div class="idx-head">Skipped <span class="idx-count">$($skipped.Count)</span></div>
+    <div class="idx-sub">Pre-flight access probe failed - excluded from the sweep, not assessed.</div>
+    <ul class="idx-list idx-list-skipped">
+$($skippedRows.ToString())
+    </ul>
+  </section>
+"@ } else { '' }
+
+    $css = @'
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin:0; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#0a1f2e; color:#fff; line-height:1.5; -webkit-font-smoothing:antialiased; }
+.container { max-width:1100px; margin:0 auto; padding:32px 24px 48px; }
+header.hero { display:flex; align-items:center; justify-content:space-between; gap:24px; background:#0D2535; border:1px solid #1a3547; border-radius:16px; padding:32px; margin-bottom:24px; }
+.brand-name { font-size:34px; font-weight:800; letter-spacing:-0.02em; }
+.brand-name .dot { color:#B3FF00; }
+.brand-sub { font-size:13px; color:#94a3b8; }
+.hero-meta { text-align:right; font-size:12px; color:#94a3b8; }
+.hero-meta .big { font-size:30px; font-weight:800; color:#fff; }
+.idx-card { background:#0D2535; border:1px solid #1a3547; border-radius:16px; padding:22px 26px; margin-bottom:18px; }
+.idx-head { font-size:17px; font-weight:700; }
+.idx-count { display:inline-block; margin-left:8px; padding:1px 9px; border-radius:11px; font-size:12px; font-weight:700; color:#0a1f2e; background:#B3FF00; }
+.idx-sub { font-size:13px; color:#94a3b8; margin:4px 0 14px; }
+.idx-list { list-style:none; margin:0; padding:0; }
+.idx-list li { display:flex; align-items:baseline; gap:16px; padding:11px 0; border-top:1px solid #1a3547; }
+.idx-link { display:flex; align-items:baseline; gap:14px; flex:1; text-decoration:none; color:inherit; }
+.idx-link:hover .idx-name { color:#B3FF00; }
+.idx-name { font-size:15px; font-weight:600; color:#e2e8f0; }
+.idx-id { font-size:12px; color:#64748b; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.idx-reason { font-size:12px; color:#f59e0b; margin-left:auto; white-space:nowrap; }
+.idx-list-skipped li { justify-content:flex-start; }
+.idx-score { font-size:20px; font-weight:800; margin-left:auto; font-variant-numeric:tabular-nums; }
+.idx-suffix { font-size:12px; font-weight:600; color:#64748b; margin-left:2px; }
+.idx-na { font-size:15px; font-weight:700; color:#64748b; margin-left:auto; }
+footer { margin-top:28px; text-align:center; font-size:12px; color:#64748b; }
+footer a { color:#33CCCC; text-decoration:none; }
+'@
+
+    return @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVD-Assess Sweep &mdash; $($Results.Count) subscription(s)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>$css</style>
+</head>
+<body>
+<div class="container">
+  <header class="hero">
+    <div>
+      <div class="brand-name">AVD<span class="dot">-</span>Assess</div>
+      <div class="brand-sub">Multi-subscription sweep</div>
+    </div>
+    <div class="hero-meta">
+      <div class="big">$($assessed.Count)</div>
+      assessed of $($Results.Count) subscription(s)<br>$GeneratedAt
+    </div>
+  </header>
+
+  <section class="idx-card">
+    <div class="idx-head">Assessed <span class="idx-count">$($assessed.Count)</span></div>
+    <div class="idx-sub">Sorted lowest score first. Click a subscription to open its detailed report.</div>
+    <ul class="idx-list">
+$($assessedRows.ToString())
+    </ul>
+  </section>
+$sectionEmpty
+$sectionSkipped
+
+  <footer>
+    AVD-Assess v$script:ToolVersion &middot;
+    <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
+    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/waynebellows/AVD-Assess</a>
+  </footer>
+</div>
+</body>
+</html>
+"@
+}
+
+function Invoke-SubscriptionSweep {
+    Assert-RequiredModules
+
+    Write-Section 'Connecting to Azure'
+    if (-not $UseExistingConnection) {
+        $connectArgs = @{}
+        if ($TenantId) { $connectArgs['Tenant'] = $TenantId }
+        try { Connect-AzAccount @connectArgs -WarningAction SilentlyContinue | Out-Null }
+        catch { throw "Failed to connect to Azure: $($_.Exception.Message)" }
+    }
+    $ctx = Get-AzContext
+    if (-not $ctx) { throw 'No active Azure context. Run Connect-AzAccount or omit -UseExistingConnection.' }
+    Write-Host ('  Signed in as : {0}' -f $ctx.Account.Id) -ForegroundColor Gray
+
+    $subParams = @{ WarningAction = 'SilentlyContinue' }
+    if ($TenantId) { $subParams['TenantId'] = $TenantId }
+    $subs = @(Get-AzSubscription @subParams | Where-Object { $_.State -eq 'Enabled' } | Sort-Object Name)
+    if ($subs.Count -eq 0) { throw 'No enabled subscriptions are visible to this identity.' }
+    Write-Host ('  Subscriptions: {0} enabled' -f $subs.Count) -ForegroundColor Gray
+
+    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    if ($OutputPath) {
+        $sweepDir = $OutputPath
+    } else {
+        $sweepDir = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Sweep-$stamp"
+    }
+    if (-not (Test-Path $sweepDir)) { New-Item -ItemType Directory -Path $sweepDir -Force | Out-Null }
+
+    $results = [System.Collections.Generic.List[object]]::new()
+    $idx = 0
+    foreach ($sub in $subs) {
+        $idx++
+        Write-Section ("[{0}/{1}] {2}" -f $idx, $subs.Count, $sub.Name)
+        $rec = [PSCustomObject]@{
+            Name = $sub.Name; Id = $sub.Id; Status = 'Skipped'
+            Overall = $null; ReportFile = $null; Reason = ''
+        }
+
+        try {
+            Set-AzContext -SubscriptionId $sub.Id -TenantId $sub.TenantId -ErrorAction Stop | Out-Null
+        } catch {
+            $rec.Reason = "Set-AzContext failed: $($_.Exception.GetType().Name)"
+            Write-Host ("  skipped: {0}" -f $rec.Reason) -ForegroundColor Yellow
+            $results.Add($rec); continue
+        }
+
+        # Pre-flight access probe - one cheap call. A failure here means the
+        # identity cannot read this subscription; skip it but keep sweeping.
+        try {
+            Get-AzResourceGroup -ErrorAction Stop | Select-Object -First 1 | Out-Null
+        } catch {
+            $rec.Reason = "insufficient permissions ($($_.Exception.GetType().Name))"
+            Write-Host ("  skipped: {0}" -f $rec.Reason) -ForegroundColor Yellow
+            $results.Add($rec); continue
+        }
+
+        $script:Context = [PSCustomObject]@{
+            SubscriptionName = $sub.Name
+            SubscriptionId   = $sub.Id
+            TenantId         = $sub.TenantId
+        }
+        $script:Checks = [System.Collections.Generic.List[object]]::new()
+
+        try {
+            $hasData = Get-AvdEnvironmentData
+        } catch {
+            $rec.Reason = "data collection failed: $($_.Exception.Message)"
+            Write-Host ("  skipped: {0}" -f $rec.Reason) -ForegroundColor Yellow
+            $results.Add($rec); continue
+        }
+
+        if (-not $hasData) {
+            $rec.Status = 'Empty'
+            Write-Host '  No AVD host pools - recorded as empty.' -ForegroundColor DarkGray
+            $results.Add($rec); continue
+        }
+
+        Invoke-CostChecks
+        Invoke-ReliabilityChecks
+        Invoke-SecurityChecks
+        Invoke-OperationsChecks
+        Invoke-PerformanceChecks
+
+        Write-ScoreSummaryConsole
+
+        $slug    = Get-SubSlug -Name $sub.Name -Id $sub.Id
+        $base    = Join-Path $sweepDir ("AVD-Assess-Report-{0}-{1}.html" -f $slug, $stamp)
+        $written = Save-Reports -BasePath $base
+
+        $rec.Status     = 'Assessed'
+        $rec.Overall    = Get-OverallScore
+        $linkPath       = if ($written.Html) { $written.Html } else { $written.Json }
+        $rec.ReportFile = if ($linkPath) { Split-Path -Leaf $linkPath } else { $null }
+        $results.Add($rec)
+    }
+
+    $genStr   = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
+    $indexPath = Join-Path $sweepDir 'index.html'
+    $indexHtml = New-SweepIndexHtml -Results $results.ToArray() -GeneratedAt $genStr
+    [System.IO.File]::WriteAllText($indexPath, $indexHtml, [System.Text.UTF8Encoding]::new($false))
+
+    $aCount = @($results | Where-Object { $_.Status -eq 'Assessed' }).Count
+    $eCount = @($results | Where-Object { $_.Status -eq 'Empty' }).Count
+    $sCount = @($results | Where-Object { $_.Status -eq 'Skipped' }).Count
+    Write-Section 'Sweep Complete'
+    Write-Host ("  Assessed : {0}" -f $aCount) -ForegroundColor Green
+    Write-Host ("  Empty    : {0}" -f $eCount) -ForegroundColor DarkGray
+    Write-Host ("  Skipped  : {0}" -f $sCount) -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host ("  Roll-up index: {0}" -f $indexPath) -ForegroundColor Green
     Write-Host ''
 
     if ($OpenReport) {
-        if ($writeHtml) {
-            try { Start-Process -FilePath $htmlPath | Out-Null }
+        try { Start-Process -FilePath $indexPath | Out-Null }
+        catch { Write-Host "  (Could not open index automatically: $($_.Exception.Message))" -ForegroundColor Yellow }
+    }
+}
+
+function Invoke-Main {
+    Write-Banner
+
+    if ($AllAccessibleSubscriptions) {
+        # Sweep mode is a different shape: one baseline / one named scope
+        # doesn't map onto N subscriptions, so reject the contradictory
+        # combinations up front with a clear message instead of guessing.
+        $conflicts = @()
+        if ($DryRun)             { $conflicts += '-DryRun' }
+        if ($SubscriptionId)     { $conflicts += '-SubscriptionId' }
+        if ($HostPoolName)       { $conflicts += '-HostPoolName' }
+        if ($ResourceGroupName)  { $conflicts += '-ResourceGroupName' }
+        if ($CompareTo)          { $conflicts += '-CompareTo' }
+        if ($conflicts.Count -gt 0) {
+            throw ("-AllAccessibleSubscriptions cannot be combined with: {0}. Run those against a single subscription instead." -f ($conflicts -join ', '))
+        }
+        $script:Compare = $null
+        Invoke-SubscriptionSweep
+        return
+    }
+
+    # Validate the comparison baseline before the (potentially long) Azure
+    # collection so an unreadable or incompatible baseline fails fast.
+    $script:Compare = $null
+    if ($CompareTo) {
+        Import-CompareBaseline -Path $CompareTo
+        Write-Section 'Comparison Baseline'
+        Write-Host ("  File        : {0}" -f $script:Compare.Path)          -ForegroundColor White
+        Write-Host ("  Generated   : {0}" -f $script:Compare.GeneratedAt)   -ForegroundColor White
+        Write-Host ("  Tool / schema : {0} / {1}" -f $script:Compare.ToolVersion, $script:Compare.SchemaVersion) -ForegroundColor White
+    }
+
+    if ($DryRun) {
+        Initialize-DryRunData
+    } else {
+        Assert-RequiredModules
+        Connect-ToAzure
+        $hasData = Get-AvdEnvironmentData
+        if (-not $hasData) {
+            Write-Host ''
+            Write-Host '  Nothing to report. Exiting.' -ForegroundColor Yellow
+            return
+        }
+        Invoke-CostChecks
+        Invoke-ReliabilityChecks
+        Invoke-SecurityChecks
+        Invoke-OperationsChecks
+        Invoke-PerformanceChecks
+    }
+
+    Write-ScoreSummaryConsole
+
+    if (-not $OutputPath) {
+        $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $OutputPath = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Report-$stamp.html"
+    }
+
+    Write-Host ''
+    $written = Save-Reports -BasePath $OutputPath
+    Write-Host ''
+
+    if ($OpenReport) {
+        if ($written.Html) {
+            try { Start-Process -FilePath $written.Html | Out-Null }
             catch { Write-Host "  (Could not open report automatically: $($_.Exception.Message))" -ForegroundColor Yellow }
         } else {
             Write-Host '  (-OpenReport ignored: no HTML report was written. Use -OutputFormat HTML or Both.)' -ForegroundColor Yellow

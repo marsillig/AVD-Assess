@@ -1,6 +1,7 @@
 # Generated reports
 AVD-Assess-Report-*.html
 AVD-Assess-Report-*.json
+AVD-Assess-Sweep-*/
 _dryrun*.html
 _dryrun*.json
 *.html
