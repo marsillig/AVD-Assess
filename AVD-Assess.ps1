@@ -3049,6 +3049,8 @@ function Save-Reports {
     # Returns the paths actually written. -OutputFormat governs which.
     param([Parameter(Mandatory)][string]$BasePath)
 
+    $BasePath = Resolve-OutputPath -Path $BasePath -PathType File
+
     $outDir = Split-Path -Parent $BasePath
     if ($outDir -and -not (Test-Path $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -3074,6 +3076,39 @@ function Save-Reports {
         $written.Json = $jsonPath
     }
     return $written
+}
+
+function Resolve-OutputPath {
+    # Normalizes user-supplied output paths before .NET file APIs are used.
+    # PowerShell expands ~ for cmdlets, but [System.IO.File] does not; without
+    # this, Cloud Shell paths such as ~/clouddrive/report.html can be treated as
+    # literal child paths under the current directory.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+
+        [ValidateSet('File','Directory')]
+        [string]$PathType = 'File'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "Output $($PathType.ToLowerInvariant()) path cannot be empty."
+    }
+
+    $expanded = $Path.Trim()
+    if ($expanded -eq '~') {
+        $expanded = $HOME
+    } elseif ($expanded.StartsWith('~/') -or $expanded.StartsWith('~\')) {
+        $expanded = Join-Path -Path $HOME -ChildPath $expanded.Substring(2)
+    }
+
+    try {
+        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($expanded)
+    } catch {
+        if ([System.IO.Path]::IsPathRooted($expanded)) {
+            return $expanded
+        }
+        return (Join-Path -Path (Get-Location).Path -ChildPath $expanded)
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -3242,7 +3277,7 @@ function Invoke-SubscriptionSweep {
 
     $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
     if ($OutputPath) {
-        $sweepDir = $OutputPath
+        $sweepDir = Resolve-OutputPath -Path $OutputPath -PathType Directory
     } else {
         $sweepDir = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Sweep-$stamp"
     }
