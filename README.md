@@ -187,4 +187,4 @@ Bug reports, new checks, and report design improvements for this fork are welcom
 
 ---
 
-Fork maintained at [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). Original project by [Wayne Bellows](https://modern-euc.com): [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
+Fork maintained at [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). Original project by Wayne Bellows: [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).

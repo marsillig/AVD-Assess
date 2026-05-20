@@ -451,6 +451,7 @@ function Write-Banner {
     Write-Host '  +----------------------------------------------+' -ForegroundColor Cyan
     Write-Host $verLine                                              -ForegroundColor Cyan
     Write-Host '  |  Azure Virtual Desktop Health Checker        |' -ForegroundColor Cyan
+    Write-Host '  |  https://virtex.cloud                        |' -ForegroundColor Cyan
     Write-Host '  |  github.com/marsillig/AVD-Scout              |' -ForegroundColor Cyan
     Write-Host '  +----------------------------------------------+' -ForegroundColor Cyan
     Write-Host ''
