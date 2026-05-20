@@ -1,49 +1,50 @@
 # AVD-Scout
 
-**A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 29 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance. Optionally emits machine-readable JSON, compares a run to a previous one to show whether scores are improving, and sweeps every accessible subscription in a single pass.
+**AVD-Scout is a Virtex-branded Azure Virtual Desktop assessment tool for consultants and operators.** It connects to an Azure subscription, runs **29 read-only best-practice checks** across the five [Microsoft Well-Architected Framework pillars for Azure Virtual Desktop](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/), and generates a shareable HTML report plus optional JSON for trend tracking and automation.
 
-
-## Fork notice
-
-AVD-Scout is Gonzalo Marsilli's renamed fork of the original [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess) project by Wayne Bellows. This fork preserves the original MIT-licensed AVD health-checker foundation and adds fork-specific updates, including 2026 AVD readiness checks, Azure Cloud Shell path handling, Virtex-inspired report styling, and fork branding.
-
-## Why this exists
-
-There is no free, open-source, automated health checker for AVD. Microsoft's Well-Architected Framework for AVD is thorough documentation, but operationalising it means either paying for a commercial tool, running a manual review, or doing nothing. AVD-Scout turns the guidance into a five-minute script that produces a shareable report — covering all five WAF pillars and every finding linked to a specific Microsoft Learn article.
+AVD-Scout is Gonzalo Marsilli's renamed fork of the original [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess) project by Wayne Bellows. This fork keeps the original MIT-licensed foundation and adds Cloud Shell fixes, 2026 AVD readiness checks, Virtex styling, updated report branding, and fork-specific usage paths.
 
 ![AVD-Scout Report](docs/screenshot.png)
 
+## What this fork adds
+
+- **2026 AVD readiness checks** for dynamic autoscaling, modern RDP transport, client redirection hardening, platform currency, and AVD Classic retirement awareness.
+- **Virtex report experience** with a light Virtex-inspired palette and footer branding: `AVD-Scout v2.0.0 · https://virtex.cloud · github.com/marsillig/AVD-Scout`.
+- **Azure Cloud Shell compatibility** including reliable `~/clouddrive` output path handling.
+- **Readable dated filenames** such as `AVD-Scout-Report-2026-05-19_23-26-07.html`.
+- **Fork-aligned docs and URLs** for cloning, Cloud Shell download, and generated report links.
+
 ## What it checks
 
-**Cost Optimisation** — scaling plan coverage on pooled host pools; Start VM on Connect across both personal and pooled pools (scaling-plan-aware scoring); unhealthy hosts still in session rotation; max session limit configuration; dynamic autoscaling readiness for 2026 elastic pools.
+**Cost Optimisation** — scaling plan coverage on pooled host pools; Start VM on Connect across personal and pooled pools; unhealthy hosts still in session rotation; max session limit configuration; dynamic autoscaling readiness for elastic 2026 host pools.
 
-**Reliability & Resilience** — session host health; modern RDP transport readiness (Shortpath, UDP/network auto-detect, and Multipath signals); agent update ring split (validation vs production); session capacity headroom; FSLogix profile redundancy (zone-redundant storage SKU); availability zone distribution across multi-host pooled pools.
+**Reliability & Resilience** — session host health; modern RDP transport readiness including Shortpath, UDP/network auto-detect, and Multipath signals; agent update ring split; session capacity headroom; FSLogix profile redundancy; availability zone distribution.
 
-**Security Posture** — drive redirection policy; clipboard redirection review; 2025+ client redirection hardening across clipboard, drive, printer, and USB redirection; Trusted Launch / Secure Boot; Entra ID join status (with hybrid vs cloud-only FSLogix support matrix); Microsoft Defender for Cloud coverage (Servers + Storage plans); AVD Private Link / public network access on host pools.
+**Security Posture** — drive redirection; clipboard redirection; 2025+ client redirection hardening across clipboard, drive, printer, and USB redirection; Trusted Launch / Secure Boot; Entra ID join status; Defender for Cloud coverage; AVD Private Link / public network access.
 
-**Operational Excellence** — diagnostic settings sending to a Log Analytics workspace; resource tagging (Environment, Owner); AVD agent update state; Azure Service Health alerts covering AVD; load balancing algorithm review; Azure Virtual Desktop Classic retirement readiness before 30 September 2026.
+**Operational Excellence** — diagnostic settings to Log Analytics; resource tagging; AVD agent update state; Azure Service Health alerts; load balancing algorithm review; AVD Classic retirement readiness before 30 September 2026.
 
-**Performance Efficiency** — Accelerated Networking on session host NICs; OS disk performance tier (Premium SSD or better on multi-session hosts); VM generation (Gen2); session host platform currency for Windows 11 24H2 / Windows Server 2025 baselines; FSLogix region colocation between host pool and profile storage.
+**Performance Efficiency** — Accelerated Networking; OS disk performance tier; VM generation; Windows 11 24H2 / Windows Server 2025 platform currency; FSLogix region colocation.
 
-Every finding names the affected resources, explains the fix in concrete terms, and links to the relevant Microsoft Learn article.
+Every finding names affected resources where possible, explains the risk, recommends concrete remediation, and links to Microsoft Learn.
 
 ## Prerequisites
 
-- **PowerShell 7+** — [download from Microsoft](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)
+- **PowerShell 7+** — [install PowerShell](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)
 - **Az PowerShell modules** — `Az.Accounts`, `Az.DesktopVirtualization`, `Az.Compute`, `Az.Monitor`, `Az.Resources`, `Az.Network`, `Az.Storage`, `Az.Security`
-- **Azure permissions** — `Reader` on the subscription covers most checks. Two checks need additional scope:
-  - **Defender for Cloud coverage** — `Microsoft.Security/pricings/read` (granted by *Security Reader*)
-  - **Service Health alerts** — `Microsoft.Insights/activityLogAlerts/read` (granted by *Monitoring Reader*)
-  
-  Both are read-only and additive — checks degrade to `Info` rather than failing if missing.
+- **Azure permissions** — `Reader` covers most checks. Some checks benefit from additional read-only permissions:
+  - **Defender for Cloud coverage** — `Microsoft.Security/pricings/read`, typically via *Security Reader*
+  - **Service Health alerts** — `Microsoft.Insights/activityLogAlerts/read`, typically via *Monitoring Reader*
+
+Checks degrade to `Info` rather than failing the run when optional permissions are missing.
 
 ## Quick start
 
 ```powershell
-# Install required modules (one-time)
+# Install required modules once
 Install-Module Az.Accounts, Az.DesktopVirtualization, Az.Compute, Az.Monitor, Az.Resources, Az.Network, Az.Storage, Az.Security -Scope CurrentUser
 
-# Clone the repo
+# Clone this fork
 git clone https://github.com/marsillig/AVD-Scout.git
 cd AVD-Scout
 
@@ -51,140 +52,107 @@ cd AVD-Scout
 ./AVD-Scout.ps1 -OpenReport
 ```
 
-The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 29 checks, and writes `AVD-Scout-Report-yyyy-MM-dd_HH-mm-ss.html` to the current directory.
+By default, AVD-Scout writes a timestamped report like:
+
+```text
+AVD-Scout-Report-yyyy-MM-dd_HH-mm-ss.html
+```
 
 ## Running from Azure Cloud Shell
 
-AVD-Scout works in [Azure Cloud Shell](https://shell.azure.com) (PowerShell mode) — no local install, and you're already signed in to your tenant.
+AVD-Scout works in [Azure Cloud Shell](https://shell.azure.com) PowerShell mode.
 
 ```powershell
-# 1. Install the modules Cloud Shell doesn't ship by default
+# 1. Install modules Cloud Shell might not already have
 Install-Module Az.DesktopVirtualization, Az.Security -Scope CurrentUser -Force
 
-# 2. Download the script into your persistent Cloud Drive
+# 2. Download this fork's script into persistent Cloud Drive
 curl -o ~/clouddrive/AVD-Scout.ps1 https://raw.githubusercontent.com/marsillig/AVD-Scout/main/AVD-Scout.ps1
 
-# 3. Run it against your current Cloud Shell context
+# 3. Run using the existing Cloud Shell sign-in
 ~/clouddrive/AVD-Scout.ps1 -UseExistingConnection -OutputPath ~/clouddrive/avd-scout.html
 ```
 
-Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `avd-scout.html` and open it locally.
+Then use **Manage files → Download** in Cloud Shell to download `avd-scout.html`.
 
-**Notes:**
-- Use `-UseExistingConnection` — Cloud Shell is already authenticated.
-- Omit `-OpenReport` — there's no browser inside Cloud Shell.
-- Writing to `~/clouddrive` keeps the report across sessions.
+## Common usage
+
+```powershell
+# Generate HTML only
+./AVD-Scout.ps1 -UseExistingConnection
+
+# Generate HTML and JSON
+./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd-scout.html
+
+# Compare against a previous JSON report
+./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd-scout.json
+
+# Assess one host pool
+./AVD-Scout.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
+
+# Sweep every enabled subscription visible to the signed-in identity
+./AVD-Scout.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both -OpenReport
+
+# Render synthetic data without Azure calls
+./AVD-Scout.ps1 -DryRun -OutputPath .\_dryrun.html -OpenReport
+```
 
 ## Parameters
 
 | Parameter | Description | Example |
 |---|---|---|
-| `-SubscriptionId` | Azure subscription ID to assess. Falls back to the current Az context. | `00000000-0000-0000-0000-000000000000` |
-| `-TenantId` | Azure tenant ID. Falls back to the current Az context. | `11111111-1111-1111-1111-111111111111` |
-| `-OutputPath` | Path for the report. Defaults to the current directory with a timestamp. In sweep mode this is the output **directory**. | `C:\Reports\avd-scout.html` |
-| `-OutputFormat` | `HTML` (default), `JSON`, or `Both`. JSON is a structured, machine-readable document for trend tracking, CI/CD gates, or dashboards. | `Both` |
-| `-CompareTo` | Path to a JSON report from a previous run. Annotates every score (overall, per-category, per-check) with its movement since that run, flags new checks, and lists checks no longer assessed. | `.\AVD-Scout-Report-2026-04-01_09-00-00.json` |
-| `-AllAccessibleSubscriptions` | Sweep every enabled subscription the signed-in identity can see. Writes one report pair per subscription plus an `index.html` roll-up. | *switch* |
-| `-HostPoolName` | Scope the assessment to a single host pool (requires `-ResourceGroupName`). | `hp-prod-pooled-01` |
-| `-ResourceGroupName` | Scope the assessment to a specific resource group. | `rg-avd-prod` |
-| `-UseExistingConnection` | Skip `Connect-AzAccount` and use the existing Az context. Useful for automation. | *switch* |
-| `-OpenReport` | Open the HTML report in the default browser when complete. | *switch* |
-| `-DryRun` | Render the report with synthetic data — no Azure calls. Useful for UI verification and contributors testing changes. | *switch* |
-| `-FSLogixStorageAccount` | Name of the FSLogix profile storage account, applied to every host pool in scope. Overrides tag and pattern discovery. | `stfslogixprod` |
-| `-FSLogixTagName` | Host pool tag whose value names the FSLogix storage account. Defaults to `FSLogixStorageAccount`. | `ProfileStorage` |
-| `-FSLogixNamePattern` | Wildcard pattern used to identify FSLogix storage accounts by name. Defaults to `*fslogix*`. Set to empty string to disable name-pattern discovery. | `*profiles*` |
+| `-SubscriptionId` | Azure subscription ID to assess. Uses current Az context if omitted. | `00000000-0000-0000-0000-000000000000` |
+| `-TenantId` | Azure tenant ID. Uses current Az context if omitted. | `11111111-1111-1111-1111-111111111111` |
+| `-OutputPath` | Report path. Defaults to timestamped HTML. In sweep mode, this is the output directory. | `C:\Reports\avd-scout.html` |
+| `-OutputFormat` | `HTML`, `JSON`, or `Both`. | `Both` |
+| `-CompareTo` | Previous JSON report for score deltas and new/removed check tracking. | `.\AVD-Scout-Report-2026-04-01_09-00-00.json` |
+| `-AllAccessibleSubscriptions` | Sweep every enabled subscription visible to the identity. | switch |
+| `-HostPoolName` | Scope to one host pool. Requires `-ResourceGroupName`. | `hp-prod-pooled-01` |
+| `-ResourceGroupName` | Scope to one resource group or pair with `-HostPoolName`. | `rg-avd-prod` |
+| `-UseExistingConnection` | Reuse current Az login instead of calling `Connect-AzAccount`. | switch |
+| `-OpenReport` | Open the HTML report after generation. Avoid in Cloud Shell. | switch |
+| `-DryRun` | Generate synthetic report data with no Azure calls. | switch |
+| `-FSLogixStorageAccount` | Explicit FSLogix profile storage account name. | `stfslogixprod` |
+| `-FSLogixTagName` | Host pool tag whose value names the FSLogix storage account. | `ProfileStorage` |
+| `-FSLogixNamePattern` | Storage account name wildcard for FSLogix discovery. | `*profiles*` |
 
-### FSLogix storage discovery
+## FSLogix storage discovery
 
-The FSLogix Region Colocation and Profile Redundancy checks need to know which storage account hosts your profile containers. Discovery is three-stage, in this order:
+The FSLogix Region Colocation and Profile Redundancy checks need to identify profile storage. Discovery runs in this order:
 
-1. **`-FSLogixStorageAccount`** — explicit parameter, applies to every host pool. Best for one-off runs.
-2. **Host pool tag** (default name `FSLogixStorageAccount`) — durable; recommended for ongoing use. AVD-Scout proposes this as a community convention; no Microsoft-blessed standard exists.
-3. **Name-pattern scan** in the host pool's resource group (default `*fslogix*`).
+1. `-FSLogixStorageAccount` explicit override
+2. Host pool tag, default `FSLogixStorageAccount`
+3. Storage account name-pattern scan in the host pool resource group, default `*fslogix*`
 
-If none match, both FSLogix checks return `Info`. The finding text records which method matched so you can tell whether the result was auto-detected or supplied.
+If storage cannot be discovered, FSLogix-dependent checks return `Info` and explain how to make discovery deterministic.
 
-## JSON output & trend tracking
+## JSON, trends, and multi-subscription sweep
 
-`-OutputFormat JSON` (or `Both`) writes a structured `*.json` document alongside (or instead of) the HTML — the same checks, scores, and metadata in a stable, versioned schema suitable for dashboards, CI/CD gates, or diffing over time.
+`-OutputFormat JSON` or `Both` emits a stable JSON report with environment metadata, category scores, check results, remediation text, and Learn links.
 
-```powershell
-# HTML + JSON in one run
-./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd-scout.html
+`-CompareTo` annotates the current run with deltas (`▲`, `▼`, `=`), flags checks that are new since the baseline, and lists checks that are no longer assessed.
 
-# Later, show how every score has moved since that run
-./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd-scout.json
-```
+`-AllAccessibleSubscriptions` assesses every enabled subscription the identity can read, skips inaccessible subscriptions instead of failing the whole run, and writes an `index.html` roll-up plus one report pair per assessed subscription.
 
-With `-CompareTo`, the HTML report and console show a movement badge next to every score — overall, per-category, and per-check (`▲ +5` improved, `▼ −3` regressed, `=` unchanged). Checks that didn't exist in the baseline are flagged **new**; checks present in the baseline but no longer produced are listed in a **No longer assessed** section so a dropped check is never silently lost. The JSON gains `comparedTo`, `scores.delta`, per-check `delta`/`isNew`, and a `removedChecks` array.
+## Scoring model
 
-The JSON envelope carries a `schemaVersion` (semver: minor = additive, major = breaking). `-CompareTo` refuses to diff across incompatible **major** versions with a clear message rather than producing meaningless deltas — a baseline from an older minor schema still diffs cleanly.
+- **Pass** — meets best practice; score 100
+- **Warning** — partial gap or moderate risk; score 40–80
+- **Fail** — significant risk or missing baseline control; score 0–40
+- **Info** — not applicable, not enough data, or missing optional permissions; excluded from category averages
 
-## Multi-subscription sweep
+Category scores average non-Info checks. The overall score averages category scores. Categories with partial `Info` results show `X of Y scored` so incomplete evidence is visible.
 
-Most enterprise AVD estates span several subscriptions (prod / dev / DR). `-AllAccessibleSubscriptions` assesses every enabled subscription the signed-in identity can see in one pass:
+## Project lineage
 
-```powershell
-./AVD-Scout.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
-```
-
-- Each subscription gets a pre-flight access probe; one it can't read is **skipped** (and listed with the reason) rather than aborting the whole sweep.
-- One HTML/JSON report pair is written per assessed subscription, plus an `index.html` roll-up grouping subscriptions into **Assessed** (score, linked to the detailed report, sorted lowest-first), **Empty** (accessible but no AVD), and **Skipped**.
-- `-OutputPath` is treated as the output **directory** (default `.\AVD-Scout-Sweep-<timestamp>`); `-OpenReport` opens the index.
-- Cannot be combined with `-SubscriptionId`, `-HostPoolName`, `-ResourceGroupName`, `-CompareTo`, or `-DryRun` (rejected up front with a clear message).
-
-## Examples
-
-```powershell
-# Full subscription, open the report when done
-./AVD-Scout.ps1 -SubscriptionId "00000000-0000-0000-0000-000000000000" -OpenReport
-
-# Single host pool
-./AVD-Scout.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
-
-# Automation-friendly (already authenticated)
-./AVD-Scout.ps1 -UseExistingConnection -OutputPath "C:\Reports\avd-scout-health.html"
-
-# Verify the report layout without hitting Azure (synthetic data)
-./AVD-Scout.ps1 -DryRun -OpenReport
-
-# FSLogix storage isn't tagged or name-matched - override for this run
-./AVD-Scout.ps1 -UseExistingConnection -OpenReport -FSLogixStorageAccount stfslogixprod
-
-# HTML + machine-readable JSON
-./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd-scout.html
-
-# Trend: compare this run to a previous JSON report
-./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd-scout.json
-
-# Sweep every accessible subscription into a dated folder
-./AVD-Scout.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both -OpenReport
-```
-
-## How the scoring works
-
-Each check returns a status and a 0–100 score:
-
-- **Pass** (green) — meets best practice. Score 100.
-- **Warning** (amber) — partial gap or non-critical issue. Score 40–80.
-- **Fail** (red) — significant cost, reliability, or security risk. Score 0–40.
-- **Info** (teal) — couldn't be evaluated (e.g. missing data, permissions, or check not applicable to the environment). Excluded from category averages.
-
-**Category score** = average of non-Info checks in that category. **Overall score** = average of the category scores.
-
-Two presentation rules keep partially evaluated results honest:
-
-- When a category has at least one Info check, the card displays `X of Y scored` beneath the donut so a passing-looking score doesn't disguise a partially evaluated category.
-- When *every* check in a category is Info, the donut renders `N/A` and the category is excluded from the overall score entirely.
+- This fork: [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout)
+- Upstream original: [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess)
+- Branding/site link used in generated reports: [https://virtex.cloud](https://virtex.cloud)
 
 ## Contributing
 
-Bug reports, new checks, and report design improvements for this fork are welcome via [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). See [CONTRIBUTING.md](CONTRIBUTING.md) for the data model and style guidance. For the upstream project, refer to [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
+Bug reports, check ideas, and report improvements for this fork are welcome in [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). Keep contributions read-only, single-file, and aligned with the existing Az module dependency set.
 
 ## License
 
-[MIT](LICENSE) — use, modify, and redistribute freely.
-
----
-
-Fork maintained at [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). Original project by Wayne Bellows: [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
+[MIT](LICENSE) — this fork preserves the upstream MIT license.
