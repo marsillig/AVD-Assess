@@ -2921,7 +2921,7 @@ function New-HtmlReport {
         $effText = if ($null -eq $effectiveOverall) { 'N/A' } else { ('{0}/100' -f $effectiveOverall) }
         $nativeText = if ($null -eq $overall) { 'N/A' } else { ('{0}/100' -f $overall) }
         $effectiveOverallHtml = '<div class="effective-score nerdio-extra"><span>Native Score</span><strong>{0}</strong><span>Nerdio Effective</span><strong>{1}</strong></div>' -f $nativeText, $effText
-        $nerdioToggleHtml = '<button type="button" class="nerdio-toggle" onclick="toggleNerdioOverlay()" aria-pressed="false">Nerdio Manager</button>'
+        $nerdioToggleHtml = '<button type="button" class="nerdio-toggle" onclick="toggleNerdioOverlay()" aria-pressed="false">Nerdio Managed</button>'
         $nerdioScriptHtml = @'
 <script>
 function toggleNerdioOverlay() {
@@ -2930,7 +2930,7 @@ function toggleNerdioOverlay() {
   if (button) {
     var enabled = document.body.classList.contains('nerdio-visible');
     button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
-    button.textContent = enabled ? 'Hide Nerdio' : 'Nerdio Manager';
+    button.textContent = 'Nerdio Managed';
   }
 }
 </script>
@@ -3035,6 +3035,7 @@ header.hero {
   color: #fff;
   background: linear-gradient(135deg, #4e29a0, #14b8a6);
   border-color: transparent;
+  box-shadow: 0 14px 30px rgba(20,184,166,0.18);
 }
 .nerdio-extra { display: none !important; }
 body.nerdio-visible .nerdio-extra { display: inline-flex !important; }
@@ -3247,12 +3248,14 @@ body.nerdio-visible .nerdio-note { display: block !important; }
 }
 .effective-score {
   grid-template-columns: auto auto;
-  gap: 2px 10px;
-  margin-top: 8px;
-  font-size: 11px;
+  gap: 3px 14px;
+  margin-top: 10px;
+  font-size: 12px;
   color: #64748b;
 }
-.effective-score strong { color: #4e29a0; font-weight: 800; }
+.effective-score span,
+.effective-score strong { line-height: 1.2; }
+.effective-score strong { color: #4e29a0; font-weight: 800; text-align: right; }
 .cat-effective {
   font-size: 11px;
   color: #4e29a0;
