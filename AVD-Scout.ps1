@@ -2893,21 +2893,21 @@ $($rrows.ToString())
     $topRiskName = if ($topRisk.Count -gt 0) { ConvertTo-HtmlSafe $topRisk[0].CheckName } else { 'No critical gaps' }
 
     $featureCards = @(
-        New-MarketingCardHtml -Icon '01' -Kicker 'Secure access' -Title 'Expose access risk quickly' -Body 'Review redirection policy, Private Link posture, Trusted Launch, Defender coverage, and Entra ID join signals in one report.'
-        New-MarketingCardHtml -Icon '02' -Kicker 'Automation' -Title 'Validate scalable operations' -Body 'Check scaling plans, dynamic autoscaling readiness, tagging, diagnostic settings, and Service Health alert coverage.'
-        New-MarketingCardHtml -Icon '03' -Kicker 'Experience' -Title 'Improve user performance' -Body 'Surface Shortpath transport readiness, Accelerated Networking, platform currency, disk tier, and FSLogix placement risks.'
+        New-MarketingCardHtml -Icon '01' -Kicker 'Security' -Title 'Access controls' -Body 'Reviews redirection policy, Private Link posture, Trusted Launch, Defender coverage, and Entra ID join signals.'
+        New-MarketingCardHtml -Icon '02' -Kicker 'Operations' -Title 'Management controls' -Body 'Checks scaling plans, dynamic autoscaling readiness, tagging, diagnostic settings, and Service Health alert coverage.'
+        New-MarketingCardHtml -Icon '03' -Kicker 'Performance' -Title 'User experience signals' -Body 'Surfaces Shortpath transport readiness, Accelerated Networking, platform currency, disk tier, and FSLogix placement risks.'
     ) -join "`n"
 
     $valueCards = @(
-        New-MarketingCardHtml -Icon '✓' -Title 'Reduce assessment time' -Body 'Generate an evidence-backed AVD posture report in minutes using read-only Azure APIs.'
-        New-MarketingCardHtml -Icon '↗' -Title 'Prioritize remediation' -Body 'Scores, failed checks, and warnings help teams focus on the changes most likely to reduce risk or improve experience.'
-        New-MarketingCardHtml -Icon '◆' -Title 'Track progress over time' -Body 'Optional JSON output and baseline comparison show whether the environment is improving or regressing.'
+        New-MarketingCardHtml -Icon '✓' -Title 'Read-only collection' -Body 'Uses Azure read APIs only. No configuration changes are made by the assessment.'
+        New-MarketingCardHtml -Icon '↗' -Title 'Prioritized findings' -Body 'Failed checks and warnings identify the items to review first during remediation planning.'
+        New-MarketingCardHtml -Icon '◆' -Title 'Baseline comparison' -Body 'Optional JSON output supports later comparison to show score movement and newly added checks.'
     ) -join "`n"
 
     $insightCards = @(
-        New-InsightCardHtml -Metric ("{0}/100" -f $overall) -Title 'Current posture' -Body 'Overall score across Cost, Reliability, Security, Operations, and Performance.'
-        New-InsightCardHtml -Metric ("{0} fail" -f $failCount) -Title 'Immediate attention' -Body ("Lowest scoring item: {0}." -f $topRiskName)
-        New-InsightCardHtml -Metric ("{0} warn" -f $warnCount) -Title 'Improvement backlog' -Body 'Warnings identify configuration gaps that can usually be resolved without redesigning the environment.'
+        New-InsightCardHtml -Metric ("{0}/100" -f $overall) -Title 'Overall score' -Body 'Average across Cost, Reliability, Security, Operations, and Performance categories.'
+        New-InsightCardHtml -Metric ("{0} fail" -f $failCount) -Title 'Failed checks' -Body ("Lowest-scoring item: {0}." -f $topRiskName)
+        New-InsightCardHtml -Metric ("{0} warn" -f $warnCount) -Title 'Warnings' -Body 'Configuration gaps that should be reviewed and assigned for remediation where applicable.'
     ) -join "`n"
 
     $css = @'
@@ -3033,12 +3033,12 @@ footer a { color:var(--purple); text-decoration:none; font-weight:800; }
 
   <header class="hero" id="about">
     <div class="hero-copy">
-      <div class="eyebrow">Azure Virtual Desktop Health Report</div>
-      <h1>Transforming your AVD posture into clear action<span class="headline-accent">.</span></h1>
-      <p class="hero-sub">A premium, read-only assessment for secure access, resilient operations, and better digital workspace experience.</p>
+      <div class="eyebrow">Assessment report</div>
+      <h1>Azure Virtual Desktop health assessment<span class="headline-accent">.</span></h1>
+      <p class="hero-sub">Read-only configuration review for subscription <strong>$subName</strong>. Generated $generated.</p>
       <div class="hero-actions">
-        <a class="btn-primary" href="#services">Explore results</a>
-        <a class="btn-secondary" href="#cases">Review insights</a>
+        <a class="btn-primary" href="#services">View findings</a>
+        <a class="btn-secondary" href="#cases">View summary</a>
       </div>
     </div>
     <div class="hero-visual" aria-label="Overall score visual">
@@ -3065,9 +3065,9 @@ footer a { color:var(--purple); text-decoration:none; font-weight:800; }
     <div class="section-head">
       <div>
         <div class="section-kicker">Services</div>
-        <h2 class="section-title">Assessment pillars</h2>
+        <h2 class="section-title">Findings by pillar</h2>
       </div>
-      <p class="section-sub">Five Well-Architected views of the same workspace environment, grouped so operations and security teams can act without reading raw Azure data.</p>
+      <p class="section-sub">Results are grouped by Well-Architected pillar. Expand each check to view evidence, remediation, and Microsoft Learn references.</p>
     </div>
     <div class="categories">
       $cardCost
@@ -3083,9 +3083,9 @@ $removedHtml
     <div class="section-head">
       <div>
         <div class="section-kicker">Business value</div>
-        <h2 class="section-title">Designed for decision makers and operators</h2>
+        <h2 class="section-title">Operational use</h2>
       </div>
-      <p class="section-sub">Concise outputs for executive conversations, with enough technical detail for the team that owns remediation.</p>
+      <p class="section-sub">The report is designed for review meetings, remediation planning, and repeat assessments over time.</p>
     </div>
     <div class="feature-grid">$featureCards</div>
     <div class="value-grid" style="margin-top:20px;">$valueCards</div>
@@ -3095,19 +3095,19 @@ $removedHtml
     <div class="section-head">
       <div>
         <div class="section-kicker">Cases & insights</div>
-        <h2 class="section-title">What this run says</h2>
+        <h2 class="section-title">Run summary</h2>
       </div>
-      <p class="section-sub">A compact briefing layer over the detailed findings, useful for steering prioritization after the report is generated.</p>
+      <p class="section-sub">High-level counts and the lowest-scoring item from this assessment run.</p>
     </div>
     <div class="insight-grid">$insightCards</div>
   </section>
 
   <section class="final-cta" id="contact">
     <div>
-      <h2>Ready to improve the workspace experience?</h2>
-      <p>Use these findings to plan the next remediation sprint across secure access, performance, reliability, and operational governance.</p>
+      <h2>Next step</h2>
+      <p>Review failed and warning checks, assign owners, and track progress with a future JSON baseline comparison.</p>
     </div>
-    <a class="btn-primary" href="https://virtex.cloud" target="_blank" rel="noopener">Visit Virtex Cloud</a>
+    <a class="btn-primary" href="https://virtex.cloud" target="_blank" rel="noopener">Virtex Cloud</a>
   </section>
 
   <footer>
