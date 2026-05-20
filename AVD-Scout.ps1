@@ -3,11 +3,11 @@
     AVD-Scout - Azure Virtual Desktop health checker.
 
 .DESCRIPTION
-    Connects to an Azure subscription, runs 16 best-practice checks against Azure
+    Connects to an Azure subscription, runs 29 best-practice checks against Azure
     Virtual Desktop (AVD) host pools, session hosts, scaling plans, and related
     resources, and produces a self-contained HTML report with traffic-light
-    scoring and remediation guidance across Cost, Reliability, Security, and
-    Operational Excellence.
+    scoring and remediation guidance across Cost, Reliability, Security,
+    Operational Excellence, and Performance Efficiency.
 
 .PARAMETER SubscriptionId
     Azure subscription ID to assess. If not provided, uses the current Az context.
@@ -35,6 +35,12 @@
 .PARAMETER DryRun
     Generate a report using synthetic data - no Azure calls are made. Used for
     HTML layout verification and for contributors testing UI changes.
+
+.PARAMETER ManagedByNerdio
+    Preserve native Microsoft-aligned scores and add a Nerdio-adjusted effective
+    score overlay for selected operational checks that may be covered by Nerdio
+    Manager autoscale, host lifecycle, image management, and disk optimization
+    policies. This is advisory only and does not call Nerdio APIs.
 
 .PARAMETER FSLogixStorageAccount
     Optional: name of the storage account hosting FSLogix profile containers.
@@ -107,6 +113,11 @@
     .\AVD-Scout.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
 
 .EXAMPLE
+    .\AVD-Scout.ps1 -UseExistingConnection -ManagedByNerdio -OutputFormat Both
+    Assess a Nerdio-managed environment, preserving native scores and adding a
+    Nerdio-adjusted effective score overlay.
+
+.EXAMPLE
     .\AVD-Scout.ps1 -UseExistingConnection -OutputPath "C:\Reports\avd-health.html"
 
 .NOTES
@@ -127,6 +138,7 @@ param(
     [switch]$UseExistingConnection,
     [switch]$OpenReport,
     [switch]$DryRun,
+    [switch]$ManagedByNerdio,
     [string]$FSLogixStorageAccount,
     [string]$FSLogixTagName    = 'FSLogixStorageAccount',
     [string]$FSLogixNamePattern = '*fslogix*',
@@ -142,13 +154,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $script:ToolVersion       = '2.0.0'
-$script:JsonSchemaVersion = '1.1'   # Bump major on breaking changes, minor on additive changes.
+$script:JsonSchemaVersion = '1.2'   # Bump major on breaking changes, minor on additive changes.
                                     # 1.1 adds the optional `comparedTo`, `scores.delta`,
                                     # per-check `delta`, and `removedChecks` fields emitted
                                     # only when -CompareTo is supplied (additive - consumers
                                     # ignore unknown fields). -CompareTo refuses to diff
                                     # incompatible *major* versions, so a 1.0 baseline still
                                     # diffs cleanly against this 1.1 build.
+                                    # 1.2 adds optional Nerdio advisory metadata and
+                                    # effective scores when -ManagedByNerdio is used.
 $script:ProjectUrl  = 'https://github.com/marsillig/AVD-Scout'
 $script:WebsiteUrl  = 'https://virtex.cloud'
 $script:RequiredModules = @(
@@ -2458,6 +2472,59 @@ function Get-OverallScore {
     return [int][math]::Round(($scores | Measure-Object -Average).Average)
 }
 
+# ==============================================================================
+# NERDIO ADVISORY OVERLAY
+# ==============================================================================
+
+$script:NerdioCoverageByCheckId = @{
+    ScalingPlanCoverage        = 'Validate the matching Nerdio autoscale profile for this host pool. Nerdio Manager can provide advanced autoscale coverage even when native Azure scaling plans are not the primary control.'
+    DynamicAutoscaleReadiness  = 'Validate the Nerdio autoscale profile and host pool model. Nerdio-managed dynamic host pools can provide equivalent or advanced grow/shrink lifecycle management.'
+    StartVmOnConnect           = 'Validate the Nerdio autoscale schedule and after-hours start behavior. Nerdio can manage power state and capacity without relying solely on native Start VM on Connect.'
+    MaxSessionLimit            = 'Validate Nerdio autoscale thresholds and host pool capacity limits. Nerdio can manage scale decisions from session demand and related capacity signals.'
+    UnhealthyHostsInRotation   = 'Validate Nerdio auto-heal and host lifecycle policies. Nerdio can detect, repair, drain, or replace unhealthy session hosts outside this native check.'
+    SessionCapacityHeadroom    = 'Validate Nerdio autoscale capacity rules. Nerdio can add or start hosts based on demand to maintain user capacity headroom.'
+    LoadBalancingAlgorithm     = 'Validate the Nerdio host pool autoscale design. Nerdio can coordinate load balancing behavior with power and capacity management.'
+    PremiumOsDisk              = 'Validate Nerdio OS disk cost optimization settings. Nerdio can change stopped/running OS disk SKU or size as part of autoscale policy.'
+    SessionHostPlatformCurrency = 'Validate Nerdio image and host lifecycle policy. Nerdio can manage image rollout and session host refresh workflows.'
+}
+
+function Test-NerdioCoveredCheck {
+    param($Check)
+    if (-not $ManagedByNerdio) { return $false }
+    $id = [string](Get-CheckId $Check)
+    return $script:NerdioCoverageByCheckId.ContainsKey($id)
+}
+
+function Get-NerdioCoverageNote {
+    param($Check)
+    $id = [string](Get-CheckId $Check)
+    if ($script:NerdioCoverageByCheckId.ContainsKey($id)) { return $script:NerdioCoverageByCheckId[$id] }
+    return ''
+}
+
+function Get-EffectiveCheckScore {
+    param($Check)
+    if ((Test-NerdioCoveredCheck $Check) -and $Check.Status -ne 'Info') { return 100 }
+    return [int]$Check.Score
+}
+
+function Get-EffectiveCategoryScore {
+    param([string]$Category)
+    if (-not $ManagedByNerdio) { return Get-CategoryScore -Category $Category }
+    $items = @($script:Checks | Where-Object { $_.Category -eq $Category -and $_.Status -ne 'Info' })
+    if ($items.Count -eq 0) { return $null }
+    $scores = @($items | ForEach-Object { Get-EffectiveCheckScore $_ })
+    return [int][math]::Round(($scores | Measure-Object -Average).Average)
+}
+
+function Get-EffectiveOverallScore {
+    if (-not $ManagedByNerdio) { return Get-OverallScore }
+    $cats = @('Cost','Reliability','Security','Operations','Performance')
+    $scores = @($cats | ForEach-Object { Get-EffectiveCategoryScore $_ } | Where-Object { $null -ne $_ })
+    if ($scores.Count -eq 0) { return $null }
+    return [int][math]::Round(($scores | Measure-Object -Average).Average)
+}
+
 function Get-CategoryScoredTally {
     # Returns @{Scored=<int>; Total=<int>} for a category. Callers render
     # "X of Y scored" alongside the score whenever Scored < Total - so users
@@ -2622,6 +2689,13 @@ function New-CategoryCardHtml {
         ('<div class="cat-scored-tally">{0} of {1} scored</div>' -f $tally.Scored, $tally.Total)
     } else { '' }
     $catDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $score -Previous (Get-BaselineCategoryScore $Category))
+    $effectiveHtml = ''
+    if ($ManagedByNerdio) {
+        $effective = Get-EffectiveCategoryScore -Category $Category
+        if ($null -ne $effective -and $null -ne $score -and $effective -ne $score) {
+            $effectiveHtml = ('<div class="cat-effective">Nerdio effective: {0}/100</div>' -f $effective)
+        }
+    }
     $checks = @($script:Checks | Where-Object { $_.Category -eq $Category })
 
     $rows = [System.Text.StringBuilder]::new()
@@ -2642,6 +2716,19 @@ function New-CategoryCardHtml {
             } else {
                 $checkBadge = New-DeltaBadgeHtml (Get-ScoreDelta -Current ([int]$c.Score) -Previous $prev.score)
             }
+        }
+        $nerdioBadge = ''
+        $nerdioNoteBlock = ''
+        if (Test-NerdioCoveredCheck $c) {
+            $nerdioBadge = '<span class="badge-nerdio" title="Nerdio advisory coverage applied to the effective score">Nerdio-managed</span>'
+            $note = ConvertTo-HtmlSafe (Get-NerdioCoverageNote $c)
+            $effScore = Get-EffectiveCheckScore $c
+            $nerdioNoteBlock = @"
+      <div class="nerdio-note">
+        <div class="nerdio-label">Nerdio advisory coverage</div>
+        <div>$note Validate the corresponding Nerdio Manager policy/profile before treating this item as remediated. Native score remains $($c.Score)/100; Nerdio effective score is $effScore/100.</div>
+      </div>
+"@
         }
         $find   = ConvertTo-HtmlSafe $c.Finding
         $rem    = ConvertTo-HtmlSafe $c.Remediation
@@ -2666,10 +2753,11 @@ function New-CategoryCardHtml {
   <div class="check-row" onclick="this.classList.toggle('expanded')">
     <div class="check-head">
       <span class="check-name">$name</span>
-      <span class="check-badges">$checkBadge<span class="status $cls">$label</span></span>
+      <span class="check-badges">$nerdioBadge$checkBadge<span class="status $cls">$label</span></span>
     </div>
     <div class="check-detail">
       <div class="finding">$find</div>
+$nerdioNoteBlock
 $remBlock
     </div>
   </div>
@@ -2684,6 +2772,7 @@ $remBlock
       <div class="sub">$DisplayName</div>
       <div class="cat-score">$scoreHtml $catDeltaHtml</div>
       $tallyHtml
+      $effectiveHtml
     </div>
   </div>
   <div class="check-list">
@@ -2724,6 +2813,16 @@ function New-JsonReport {
         categories = $catScoresNow
     }
 
+    if ($ManagedByNerdio) {
+        $effectiveCatScores = [ordered]@{}
+        foreach ($cn in $catNames) { $effectiveCatScores[$cn] = Get-EffectiveCategoryScore $cn }
+        $scoresObj['effective'] = [ordered]@{
+            overall    = Get-EffectiveOverallScore
+            categories = $effectiveCatScores
+            basis      = 'Nerdio advisory overlay; native scores remain unchanged.'
+        }
+    }
+
     # Additive (schema 1.1): delta keys appear only when -CompareTo is active.
     # A null delta means the movement isn't computable (this run or the
     # baseline scored that level N/A), distinct from a real delta of 0.
@@ -2752,6 +2851,13 @@ function New-JsonReport {
             remediation = $c.Remediation
             learnMore   = $c.LearnMore
         }
+        if ($ManagedByNerdio -and (Test-NerdioCoveredCheck $c)) {
+            $row['nerdioCoverage'] = [ordered]@{
+                covered        = $true
+                effectiveScore = Get-EffectiveCheckScore $c
+                note           = Get-NerdioCoverageNote $c
+            }
+        }
         if ($script:Compare) {
             $prev = $script:Compare.ChecksById[[string]$id]
             $row['isNew'] = (-not $prev)
@@ -2769,6 +2875,10 @@ function New-JsonReport {
         environment   = $envObj
         scores        = $scoresObj
         checks        = @($checks)
+    }
+
+    if ($ManagedByNerdio) {
+        $envelope['managedByNerdio'] = $true
     }
 
     if ($script:Compare) {
@@ -2803,6 +2913,15 @@ function New-HtmlReport {
         "$overall<span class=""suffix"">/100</span>"
     }
     $overallDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall))
+    $effectiveOverall = Get-EffectiveOverallScore
+    $effectiveOverallHtml = ''
+    $nerdioNoticeHtml = ''
+    if ($ManagedByNerdio) {
+        $effText = if ($null -eq $effectiveOverall) { 'N/A' } else { ('{0}/100' -f $effectiveOverall) }
+        $nativeText = if ($null -eq $overall) { 'N/A' } else { ('{0}/100' -f $overall) }
+        $effectiveOverallHtml = '<div class="effective-score"><span>Native Score</span><strong>{0}</strong><span>Effective Score with Nerdio</span><strong>{1}</strong></div>' -f $nativeText, $effText
+        $nerdioNoticeHtml = '<section class="nerdio-disclaimer"><strong>Nerdio-managed assessment mode.</strong> Native Azure Virtual Desktop control checks are preserved for Microsoft Well-Architected alignment. The effective score recognizes where Nerdio Manager may provide equivalent or advanced operational coverage, such as autoscale, host lifecycle, image management, and disk optimization.</section>'
+    }
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
 
     # Compared-to meta cell + "no longer assessed" section: rendered only when
@@ -3061,6 +3180,63 @@ header.hero {
 .delta-up   { color: #22c55e; }
 .delta-down { color: #ef4444; }
 .delta-same { color: #64748b; }
+.badge-nerdio {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #0f766e;
+  background: rgba(20,184,166,0.12);
+  border: 1px solid rgba(20,184,166,0.35);
+}
+.effective-score {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 10px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #64748b;
+}
+.effective-score strong { color: #4e29a0; font-weight: 800; }
+.cat-effective {
+  font-size: 11px;
+  color: #4e29a0;
+  font-weight: 700;
+  margin-top: 5px;
+}
+.nerdio-disclaimer {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(20,184,166,0.28);
+  border-left: 4px solid #14b8a6;
+  border-radius: 12px;
+  color: #334155;
+  font-size: 13px;
+  margin: -4px 0 20px;
+  padding: 14px 18px;
+}
+.nerdio-disclaimer strong { color: #0f766e; }
+.nerdio-note {
+  background: rgba(20,184,166,0.08);
+  border-left: 3px solid #14b8a6;
+  padding: 12px 14px;
+  border-radius: 4px;
+  color: #0a0a0a;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.nerdio-label {
+  font-size: 11px;
+  color: #0f766e;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
 .badge-new {
   display: inline-flex;
   align-items: center;
@@ -3183,9 +3359,12 @@ footer a:hover { color: #4e29a0; }
       <div>
         <div class="label">Overall Score</div>
         <div class="big">$overallHtml $overallDeltaHtml</div>
+        $effectiveOverallHtml
       </div>
     </div>
   </header>
+
+  $nerdioNoticeHtml
 
   <div class="meta-bar">
     <div class="cell"><div class="meta-label">Subscription</div><div class="meta-value">$subName</div></div>
@@ -3258,6 +3437,12 @@ function Write-ScoreSummaryConsole {
     Write-Host ("  Performance Efficiency : {0}{1}" -f (& $fmtScore $perf 'Performance'), (& $catD $perf 'Performance')) -ForegroundColor White
     Write-Host ''
     Write-Host ("  Overall Score          : {0}{1}" -f (& $fmtScore $overall $null), (Format-DeltaConsole (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall)))) -ForegroundColor Cyan
+
+    if ($ManagedByNerdio) {
+        $effectiveOverall = Get-EffectiveOverallScore
+        Write-Host ("  Effective Score (Nerdio): {0}" -f (& $fmtScore $effectiveOverall $null)) -ForegroundColor Cyan
+        Write-Host "  Nerdio mode is advisory: native scores remain unchanged for comparison." -ForegroundColor DarkGray
+    }
 
     if ($script:Compare) {
         $newCount     = @($script:Checks | Where-Object { $script:Compare.ChecksById.Count -gt 0 -and -not $script:Compare.ChecksById.ContainsKey([string](Get-CheckId $_)) }).Count

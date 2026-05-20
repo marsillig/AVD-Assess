@@ -11,6 +11,7 @@
 - **Azure Cloud Shell compatibility** including reliable relative and `~` output path handling.
 - **Readable dated filenames** such as `AVD-Scout-Report-2026-05-19_23-26-07.html`.
 - **Fork-aligned docs and URLs** for direct Cloud Shell script download and generated report links.
+- **Nerdio-aware advisory scoring** with an optional effective score overlay for Nerdio-managed environments.
 
 ## What it checks
 
@@ -93,6 +94,9 @@ Then use **Manage files → Download** in Cloud Shell to download `AVD-Scout-Rep
 
 # Render synthetic data without Azure calls
 ./AVD-Scout.ps1 -DryRun -OutputPath .\_dryrun.html -OpenReport
+
+# Show native score plus a Nerdio-adjusted effective score overlay
+./AVD-Scout.ps1 -UseExistingConnection -ManagedByNerdio -OutputFormat Both
 ```
 
 ## Parameters
@@ -110,6 +114,7 @@ Then use **Manage files → Download** in Cloud Shell to download `AVD-Scout-Rep
 | `-UseExistingConnection` | Reuse current Az login instead of calling `Connect-AzAccount`. | switch |
 | `-OpenReport` | Open the HTML report after generation. Avoid in Cloud Shell. | switch |
 | `-DryRun` | Generate synthetic report data with no Azure calls. | switch |
+| `-ManagedByNerdio` | Preserve native scores and add a Nerdio-adjusted effective score overlay for selected operational checks. | switch |
 | `-FSLogixStorageAccount` | Explicit FSLogix profile storage account name. | `stfslogixprod` |
 | `-FSLogixTagName` | Host pool tag whose value names the FSLogix storage account. | `ProfileStorage` |
 | `-FSLogixNamePattern` | Storage account name wildcard for FSLogix discovery. | `*profiles*` |
@@ -126,7 +131,7 @@ If storage cannot be discovered, FSLogix-dependent checks return `Info` and expl
 
 ## JSON, trends, and multi-subscription sweep
 
-`-OutputFormat JSON` or `Both` emits a stable JSON report with environment metadata, category scores, check results, remediation text, and Learn links.
+`-OutputFormat JSON` or `Both` emits a stable JSON report with environment metadata, category scores, check results, remediation text, and Learn links. When `-ManagedByNerdio` is used, JSON also includes `managedByNerdio`, effective scores, and per-check Nerdio advisory coverage metadata.
 
 `-CompareTo` annotates the current run with deltas (`▲`, `▼`, `=`), flags checks that are new since the baseline, and lists checks that are no longer assessed.
 
@@ -140,6 +145,8 @@ If storage cannot be discovered, FSLogix-dependent checks return `Info` and expl
 - **Info** — not applicable, not enough data, or missing optional permissions; excluded from category averages
 
 Category scores average non-Info checks. The overall score averages category scores. Categories with partial `Info` results show `X of Y scored` so incomplete evidence is visible.
+
+When `-ManagedByNerdio` is used, native Microsoft-aligned scores remain unchanged for comparison and trend tracking. The report adds an advisory effective score for a conservative set of operational checks that Nerdio Manager may cover through autoscale, host lifecycle, image management, and OS disk optimization policies. Validate the matching Nerdio profiles before treating those findings as remediated.
 
 ## Project lineage
 
