@@ -67,7 +67,7 @@ AVD-Scout works in [Azure Cloud Shell](https://shell.azure.com) PowerShell mode.
 Install-Module Az.DesktopVirtualization, Az.Security -Scope CurrentUser -Force
 
 # 2. Create a project folder and download this fork's script
-mkdir -Force ~/avd-scout
+New-Item -ItemType Directory -Force -Path ~/avd-scout | Out-Null
 curl -o ~/avd-scout/AVD-Scout.ps1 https://raw.githubusercontent.com/marsillig/AVD-Scout/main/AVD-Scout.ps1
 
 # 3. Run using the existing Cloud Shell sign-in
