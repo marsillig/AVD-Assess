@@ -2794,47 +2794,6 @@ function New-JsonReport {
     return ($envelope | ConvertTo-Json -Depth 10)
 }
 
-
-function New-MarketingCardHtml {
-    param(
-        [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string]$Body,
-        [string]$Kicker = '',
-        [string]$Icon = '•'
-    )
-    $t = ConvertTo-HtmlSafe $Title
-    $b = ConvertTo-HtmlSafe $Body
-    $k = ConvertTo-HtmlSafe $Kicker
-    $i = ConvertTo-HtmlSafe $Icon
-    $kHtml = if ($Kicker) { '<div class="mini-kicker">' + $k + '</div>' } else { '' }
-    return @"
-<article class="feature-card">
-  <div class="feature-icon">$i</div>
-  $kHtml
-  <h3>$t</h3>
-  <p>$b</p>
-</article>
-"@
-}
-
-function New-InsightCardHtml {
-    param(
-        [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string]$Metric,
-        [Parameter(Mandatory)][string]$Body
-    )
-    $t = ConvertTo-HtmlSafe $Title
-    $m = ConvertTo-HtmlSafe $Metric
-    $b = ConvertTo-HtmlSafe $Body
-    return @"
-<article class="insight-card">
-  <div class="insight-metric">$m</div>
-  <h3>$t</h3>
-  <p>$b</p>
-</article>
-"@
-}
-
 function New-HtmlReport {
     $overall = Get-OverallScore
     $overallDonut = New-DonutSvg -Score $overall -Size 140
@@ -2885,124 +2844,311 @@ $($rrows.ToString())
     $cardOps    = New-CategoryCardHtml -Category 'Operations'  -DisplayName 'Operational Excellence'
     $cardPerf   = New-CategoryCardHtml -Category 'Performance' -DisplayName 'Performance Efficiency'
 
-    $failCount = @($script:Checks | Where-Object { $_.Status -eq 'Fail' }).Count
-    $warnCount = @($script:Checks | Where-Object { $_.Status -eq 'Warning' }).Count
-    $passCount = @($script:Checks | Where-Object { $_.Status -eq 'Pass' }).Count
-    $infoCount = @($script:Checks | Where-Object { $_.Status -eq 'Info' }).Count
-    $topRisk = @($script:Checks | Where-Object { $_.Status -in @('Fail','Warning') } | Sort-Object @{Expression='Score';Ascending=$true}, CheckName | Select-Object -First 1)
-    $topRiskName = if ($topRisk.Count -gt 0) { ConvertTo-HtmlSafe $topRisk[0].CheckName } else { 'No critical gaps' }
-
-    $featureCards = @(
-        New-MarketingCardHtml -Icon '01' -Kicker 'Secure access' -Title 'Expose access risk quickly' -Body 'Review redirection policy, Private Link posture, Trusted Launch, Defender coverage, and Entra ID join signals in one report.'
-        New-MarketingCardHtml -Icon '02' -Kicker 'Automation' -Title 'Validate scalable operations' -Body 'Check scaling plans, dynamic autoscaling readiness, tagging, diagnostic settings, and Service Health alert coverage.'
-        New-MarketingCardHtml -Icon '03' -Kicker 'Experience' -Title 'Improve user performance' -Body 'Surface Shortpath transport readiness, Accelerated Networking, platform currency, disk tier, and FSLogix placement risks.'
-    ) -join "`n"
-
-    $valueCards = @(
-        New-MarketingCardHtml -Icon '✓' -Title 'Reduce assessment time' -Body 'Generate an evidence-backed AVD posture report in minutes using read-only Azure APIs.'
-        New-MarketingCardHtml -Icon '↗' -Title 'Prioritize remediation' -Body 'Scores, failed checks, and warnings help teams focus on the changes most likely to reduce risk or improve experience.'
-        New-MarketingCardHtml -Icon '◆' -Title 'Track progress over time' -Body 'Optional JSON output and baseline comparison show whether the environment is improving or regressing.'
-    ) -join "`n"
-
-    $insightCards = @(
-        New-InsightCardHtml -Metric ("{0}/100" -f $overall) -Title 'Current posture' -Body 'Overall score across Cost, Reliability, Security, Operations, and Performance.'
-        New-InsightCardHtml -Metric ("{0} fail" -f $failCount) -Title 'Immediate attention' -Body ("Lowest scoring item: {0}." -f $topRiskName)
-        New-InsightCardHtml -Metric ("{0} warn" -f $warnCount) -Title 'Improvement backlog' -Body 'Warnings identify configuration gaps that can usually be resolved without redesigning the environment.'
-    ) -join "`n"
-
     $css = @'
-:root { color-scheme: light; --ink:#0a0a0a; --muted:#3b3b3b; --soft:#6b6474; --purple:#4e29a0; --cyan:#35c9ca; --sky:#0099ff; --surface:#ffffff; --wash:#f6f7f9; --lav:#ece9f2; --line:rgba(78,41,160,0.16); --shadow:0 24px 70px rgba(78,41,160,0.12); --radius:28px; }
+:root { color-scheme: light; }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body { margin:0; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; color:var(--ink); line-height:1.5; min-height:100vh; background: radial-gradient(circle at 78% 8%, rgba(53,201,202,.22), transparent 28%), radial-gradient(circle at 16% 12%, rgba(78,41,160,.16), transparent 26%), linear-gradient(180deg, #ece9f2 0%, #f6f7f9 42%, #fff 100%); -webkit-font-smoothing:antialiased; }
-a { color:var(--purple); }
-.container { max-width:1240px; margin:0 auto; padding:24px 24px 56px; }
-.navbar { position:sticky; top:12px; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:13px 16px; margin-bottom:42px; background:rgba(255,255,255,.74); border:1px solid var(--line); border-radius:999px; backdrop-filter:blur(18px); box-shadow:0 14px 40px rgba(78,41,160,.08); }
-.nav-brand { display:flex; align-items:center; gap:10px; font-weight:800; letter-spacing:-.03em; font-size:22px; }
-.nav-brand .dot { color:var(--purple); }
-.nav-links { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.nav-links a { color:var(--muted); text-decoration:none; font-size:13px; font-weight:700; padding:9px 12px; border-radius:999px; }
-.nav-links a:hover { color:var(--purple); background:rgba(78,41,160,.08); }
-.nav-cta, .btn-primary { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:11px 18px; color:#fff; background:linear-gradient(135deg,var(--purple),#6c45bd); text-decoration:none; font-weight:800; font-size:13px; box-shadow:0 14px 34px rgba(78,41,160,.25); }
-.btn-secondary { display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:10px 16px; color:var(--purple); background:#fff; border:1px solid var(--line); text-decoration:none; font-weight:800; font-size:13px; }
-.hero { position:relative; display:grid; grid-template-columns:minmax(0,1.05fr) minmax(360px,.95fr); gap:34px; align-items:center; min-height:430px; padding:54px; margin-bottom:26px; overflow:hidden; background:rgba(255,255,255,.88); border:1px solid var(--line); border-radius:36px; box-shadow:var(--shadow); }
-.hero:before { content:""; position:absolute; inset:auto -80px -180px auto; width:420px; height:420px; background:radial-gradient(circle, rgba(53,201,202,.30), transparent 64%); filter:blur(8px); }
-.hero:after { content:""; position:absolute; inset:-120px auto auto 38%; width:320px; height:320px; background:radial-gradient(circle, rgba(78,41,160,.18), transparent 65%); }
-.eyebrow, .section-kicker, .mini-kicker { color:var(--purple); text-transform:uppercase; letter-spacing:.16em; font-size:12px; font-weight:900; }
-.hero h1 { position:relative; margin:12px 0 16px; max-width:720px; font-size:clamp(46px,7vw,86px); line-height:.96; letter-spacing:-.075em; }
-.hero .headline-accent { color:var(--purple); }
-.hero-sub { position:relative; max-width:620px; margin:0 0 26px; color:var(--muted); font-size:18px; line-height:1.7; }
-.hero-actions { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
-.hero-visual { position:relative; min-height:320px; display:grid; place-items:center; }
-.orbit { position:absolute; width:330px; height:330px; border-radius:50%; background:linear-gradient(135deg, rgba(78,41,160,.08), rgba(53,201,202,.16)); border:1px solid rgba(78,41,160,.10); box-shadow:inset 0 0 0 28px rgba(236,233,242,.62), 0 30px 80px rgba(53,201,202,.20); }
-.orbit:before, .orbit:after { content:""; position:absolute; border-radius:999px; background:var(--cyan); box-shadow:0 0 34px rgba(53,201,202,.45); }
-.orbit:before { width:112px; height:16px; top:38px; right:22px; transform:rotate(16deg); }
-.orbit:after { width:88px; height:16px; bottom:48px; left:28px; transform:rotate(38deg); }
-.score-panel { position:relative; width:260px; padding:28px; border-radius:30px; background:rgba(255,255,255,.86); border:1px solid var(--line); box-shadow:0 22px 60px rgba(78,41,160,.14); text-align:center; }
-.score-panel .big-score { font-size:72px; font-weight:900; letter-spacing:-.08em; line-height:1; }
-.score-panel .score-label { margin-top:8px; color:var(--muted); font-size:12px; font-weight:900; letter-spacing:.14em; text-transform:uppercase; }
-.stats-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:1px; margin:0 0 34px; overflow:hidden; border-radius:24px; border:1px solid var(--line); background:var(--line); box-shadow:0 16px 50px rgba(78,41,160,.07); }
-.stats-strip .cell { background:rgba(255,255,255,.9); padding:20px 22px; }
-.meta-label { color:var(--muted); font-size:11px; font-weight:900; letter-spacing:.16em; text-transform:uppercase; margin-bottom:7px; }
-.meta-value { color:var(--ink); font-size:16px; font-weight:800; word-break:break-word; }
-.section { padding:54px 0 8px; }
-.section-head { display:flex; align-items:end; justify-content:space-between; gap:20px; margin-bottom:24px; }
-.section-title { margin:6px 0 0; font-size:clamp(30px,4vw,54px); line-height:1.02; letter-spacing:-.055em; }
-.section-sub { max-width:560px; color:var(--muted); font-size:16px; }
-.feature-grid, .value-grid, .insight-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
-.feature-card, .insight-card { position:relative; overflow:hidden; min-height:230px; padding:30px; border-radius:var(--radius); background:rgba(255,255,255,.90); border:1px solid var(--line); box-shadow:0 18px 60px rgba(78,41,160,.08); }
-.feature-card:after, .insight-card:after { content:""; position:absolute; right:-70px; top:-70px; width:180px; height:180px; border-radius:50%; background:radial-gradient(circle, rgba(53,201,202,.18), transparent 66%); }
-.feature-icon { width:48px; height:48px; display:grid; place-items:center; margin-bottom:22px; border-radius:16px; color:var(--purple); background:linear-gradient(135deg, rgba(78,41,160,.10), rgba(53,201,202,.14)); font-weight:900; }
-.feature-card h3, .insight-card h3 { position:relative; margin:8px 0 10px; font-size:22px; line-height:1.15; letter-spacing:-.03em; }
-.feature-card p, .insight-card p { position:relative; margin:0; color:var(--muted); line-height:1.65; }
-.insight-metric { position:relative; color:var(--purple); font-size:36px; font-weight:900; letter-spacing:-.06em; }
-.categories { display:grid; grid-template-columns:repeat(6,1fr); gap:20px; }
-.categories > .category-card { grid-column:span 2; }
-.categories > .category-card:nth-child(4), .categories > .category-card:nth-child(5) { grid-column:span 3; }
-.category-card { background:rgba(255,255,255,.92); border:1px solid var(--line); border-radius:var(--radius); padding:28px; box-shadow:0 18px 60px rgba(78,41,160,.08); }
-.category-head { display:flex; align-items:center; gap:20px; margin-bottom:22px; padding-bottom:22px; border-bottom:1px solid var(--line); }
-.category-meta .sub { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.13em; font-weight:900; margin-bottom:4px; }
-.category-meta .cat-score { font-size:36px; font-weight:900; color:var(--ink); line-height:1; letter-spacing:-.06em; }
-.category-meta .cat-score-na { font-size:22px; font-weight:800; color:#64748b; }
-.category-meta .cat-scored-tally { font-size:12px; color:var(--muted); font-weight:700; margin-top:6px; }
-.cat-score-suffix, .overall .suffix { font-size:16px; color:#64748b; font-weight:800; margin-left:3px; }
-.check-list { display:flex; flex-direction:column; gap:6px; }
-.check-row { cursor:pointer; border-radius:16px; transition:background 140ms ease, transform 140ms ease; user-select:none; }
-.check-row:hover { background:rgba(78,41,160,.06); transform:translateY(-1px); }
-.check-row.expanded { background:rgba(78,41,160,.08); }
-.check-head { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:13px 14px; }
-.check-name { font-size:14px; color:var(--ink); font-weight:750; }
-.status { display:inline-flex; align-items:center; padding:4px 10px; border-radius:999px; font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; flex-shrink:0; }
-.status.pass { color:#16a34a; background:rgba(34,197,94,.12); border:1px solid rgba(34,197,94,.35); }
-.status.warn { color:#f59e0b; background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.35); }
-.status.fail { color:#ef4444; background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.35); }
-.status.info { color:var(--purple); background:rgba(78,41,160,.10); border:1px solid rgba(78,41,160,.35); }
-.check-badges { display:inline-flex; align-items:center; gap:8px; flex-shrink:0; }
-.delta { display:inline-flex; align-items:center; font-size:12px; font-weight:900; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.delta-up { color:#16a34a; } .delta-down { color:#ef4444; } .delta-same { color:#64748b; }
-.badge-new { display:inline-flex; align-items:center; padding:4px 9px; border-radius:999px; font-size:11px; font-weight:900; text-transform:uppercase; color:var(--purple); background:rgba(78,41,160,.10); border:1px solid rgba(78,41,160,.35); }
-.check-detail { display:none; padding:2px 14px 16px; font-size:13px; color:var(--muted); }
-.check-row.expanded .check-detail { display:block; }
-.check-detail .finding { margin-bottom:12px; line-height:1.65; }
-.check-detail .remediation { background:rgba(78,41,160,.07); border-left:3px solid var(--purple); padding:13px 15px; border-radius:12px; color:var(--ink); line-height:1.65; }
-.rem-label { font-size:11px; color:var(--purple); font-weight:900; text-transform:uppercase; letter-spacing:.12em; margin-bottom:6px; }
-.learn { display:inline-block; margin-top:10px; color:var(--purple); text-decoration:none; font-weight:800; font-size:13px; border-bottom:1px dashed rgba(78,41,160,.55); }
-.removed-section { background:rgba(255,255,255,.92); border:1px solid var(--line); border-radius:var(--radius); padding:24px 28px; margin-top:24px; box-shadow:0 18px 60px rgba(78,41,160,.08); }
-.removed-title { font-size:18px; font-weight:900; color:var(--ink); }
-.removed-sub { font-size:13px; color:var(--muted); margin:4px 0 14px; }
-.removed-list { list-style:none; margin:0; padding:0; }
-.removed-list li { display:flex; align-items:baseline; justify-content:space-between; gap:16px; padding:9px 0; border-top:1px solid var(--line); }
-.final-cta { margin-top:54px; padding:42px; border-radius:36px; background:linear-gradient(135deg, #4e29a0 0%, #6c45bd 56%, #35c9ca 130%); color:#fff; display:flex; align-items:center; justify-content:space-between; gap:24px; overflow:hidden; position:relative; }
-.final-cta:after { content:""; position:absolute; right:-80px; top:-100px; width:300px; height:300px; border-radius:50%; background:rgba(255,255,255,.16); }
-.final-cta h2 { position:relative; margin:0 0 8px; font-size:34px; letter-spacing:-.05em; }
-.final-cta p { position:relative; margin:0; color:rgba(255,255,255,.82); max-width:640px; }
-.final-cta a { position:relative; background:#fff; color:var(--purple); }
-footer { margin-top:34px; padding:26px 0 0; border-top:1px solid var(--line); color:#64748b; font-size:13px; text-align:center; }
-footer a { color:var(--purple); text-decoration:none; font-weight:800; }
-.donut { flex-shrink:0; }
-@media (max-width:1100px) { .hero { grid-template-columns:1fr; } .feature-grid,.value-grid,.insight-grid { grid-template-columns:1fr; } .categories { grid-template-columns:repeat(2,1fr); } .categories > .category-card, .categories > .category-card:nth-child(4), .categories > .category-card:nth-child(5) { grid-column:span 1; } }
-@media (max-width:760px) { .container { padding:16px; } .navbar { position:relative; top:0; border-radius:24px; align-items:flex-start; } .nav-links { display:none; } .hero { padding:34px 24px; border-radius:28px; } .hero h1 { font-size:46px; } .hero-visual { min-height:250px; } .orbit { width:250px; height:250px; } .score-panel { width:210px; } .stats-strip,.categories { grid-template-columns:1fr; } .section-head,.final-cta { flex-direction:column; align-items:flex-start; } }
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: linear-gradient(180deg, #ece9f2 0%, #f6f7f9 42%, #fff 100%);
+  color: #0a0a0a;
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: 1200px; margin: 0 auto; padding: 32px 24px 48px; }
+header.hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(78,41,160,0.16);
+  border-radius: 16px;
+  padding: 32px;
+  margin-bottom: 20px;
+}
 
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.brand-name {
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #0a0a0a;
+}
+.brand-name .dot { color: #4e29a0; }
+.brand-sub {
+  font-size: 13px;
+  color: #3b3b3b;
+  letter-spacing: 0.02em;
+}
+.overall {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.overall .label {
+  font-size: 11px;
+  color: #3b3b3b;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+}
+.overall .big {
+  font-size: 54px;
+  font-weight: 800;
+  color: #0a0a0a;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.overall .suffix {
+  font-size: 20px;
+  font-weight: 600;
+  color: #64748b;
+  margin-left: 4px;
+}
+.meta-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 1px;
+  background: rgba(78,41,160,0.16);
+  border: 1px solid rgba(78,41,160,0.16);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 28px;
+}
+.meta-bar .cell { background: rgba(255,255,255,0.92); padding: 14px 18px; }
+.meta-bar .meta-label {
+  font-size: 10px;
+  color: #3b3b3b;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 5px;
+  font-weight: 600;
+}
+.meta-bar .meta-value {
+  font-size: 14px;
+  color: #0a0a0a;
+  font-weight: 500;
+  word-break: break-all;
+}
+/* 3+2 grid for the 5 WAF categories. Top row: Cost / Reliability / Security
+   each spans 2 of 6 columns. Bottom row: Operations / Performance each spans
+   3 of 6 columns so they share the full width evenly. Stacks 2-up below
+   1100px and 1-up below 760px. */
+.categories {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 20px;
+}
+.categories > .category-card { grid-column: span 2; }
+.categories > .category-card:nth-child(4),
+.categories > .category-card:nth-child(5) { grid-column: span 3; }
+@media (max-width: 1100px) {
+  .categories { grid-template-columns: repeat(2, 1fr); }
+  .categories > .category-card,
+  .categories > .category-card:nth-child(4),
+  .categories > .category-card:nth-child(5) { grid-column: span 1; }
+}
+.category-card {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(78,41,160,0.16);
+  border-radius: 16px;
+  padding: 28px;
+}
+.category-head {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(78,41,160,0.16);
+}
+.category-meta .sub {
+  font-size: 11px;
+  color: #3b3b3b;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.category-meta .cat-score {
+  font-size: 34px;
+  font-weight: 800;
+  color: #0a0a0a;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.category-meta .cat-score-na {
+  font-size: 22px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+.category-meta .cat-scored-tally {
+  font-size: 11px;
+  color: #3b3b3b;
+  font-weight: 500;
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+.overall .overall-na {
+  color: #64748b;
+  letter-spacing: 0.04em;
+}
+.category-meta .cat-score-suffix {
+  font-size: 14px;
+  color: #64748b;
+  font-weight: 600;
+  margin-left: 3px;
+}
+.check-list { display: flex; flex-direction: column; gap: 4px; }
+.check-row {
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background 140ms ease;
+  user-select: none;
+}
+.check-row:hover { background: rgba(78,41,160,0.08); }
+.check-row.expanded { background: rgba(78,41,160,0.10); }
+.check-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+}
+.check-name { font-size: 14px; color: #0a0a0a; font-weight: 500; }
+.status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.status.pass { color: #22c55e; background: rgba(34,197,94,0.12);  border: 1px solid rgba(34,197,94,0.35); }
+.status.warn { color: #f59e0b; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.35); }
+.status.fail { color: #ef4444; background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.35); }
+.status.info { color: #4e29a0; background: rgba(78,41,160,0.10); border: 1px solid rgba(78,41,160,0.35); }
+.check-badges { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.delta {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.delta-up   { color: #22c55e; }
+.delta-down { color: #ef4444; }
+.delta-same { color: #64748b; }
+.badge-new {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #4e29a0;
+  background: rgba(78,41,160,0.10);
+  border: 1px solid rgba(78,41,160,0.35);
+}
+.cat-score .delta { font-size: 13px; margin-left: 6px; }
+.overall .big .delta { font-size: 20px; margin-left: 8px; vertical-align: middle; }
+.removed-section {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(78,41,160,0.16);
+  border-radius: 16px;
+  padding: 24px 28px;
+  margin-top: 24px;
+}
+.removed-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0a0a0a;
+  margin-bottom: 4px;
+}
+.removed-sub { font-size: 13px; color: #3b3b3b; margin-bottom: 14px; }
+.removed-list { list-style: none; margin: 0; padding: 0; }
+.removed-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-top: 1px solid rgba(78,41,160,0.16);
+}
+.removed-name { font-size: 14px; color: #3b3b3b; }
+.removed-meta { font-size: 12px; color: #64748b; white-space: nowrap; }
+.check-detail {
+  display: none;
+  padding: 4px 14px 14px 14px;
+  font-size: 13px;
+  color: #3b3b3b;
+}
+.check-row.expanded .check-detail { display: block; }
+.check-detail .finding { margin-bottom: 12px; line-height: 1.6; }
+.check-detail .remediation {
+  background: rgba(78,41,160,0.08);
+  border-left: 3px solid #4e29a0;
+  padding: 12px 14px;
+  border-radius: 4px;
+  color: #0a0a0a;
+  line-height: 1.6;
+}
+.check-detail .rem-label {
+  font-size: 11px;
+  color: #4e29a0;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
+.learn {
+  display: inline-block;
+  margin-top: 10px;
+  color: #4e29a0;
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 13px;
+  border-bottom: 1px dashed rgba(78,41,160,0.55);
+  padding-bottom: 1px;
+}
+.learn:hover { color: #4e29a0; border-bottom-color: #4e29a0; }
+.remediation-link { margin-top: 8px; }
+.donut { flex-shrink: 0; }
+footer {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(78,41,160,0.16);
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
+}
+footer a { color: #4e29a0; text-decoration: none; }
+footer a:hover { color: #4e29a0; }
+@media (max-width: 760px) {
+  header.hero { flex-direction: column; align-items: flex-start; }
+  .overall { align-self: flex-end; }
+  .categories { grid-template-columns: 1fr; }
+  .categories > .category-card,
+  .categories > .category-card:nth-child(4),
+  .categories > .category-card:nth-child(5) { grid-column: span 1; }
+}
 '@
 
     $html = @"
@@ -3019,39 +3165,21 @@ footer a { color:var(--purple); text-decoration:none; font-weight:800; }
 </head>
 <body>
 <div class="container">
-  <nav class="navbar" aria-label="Report navigation">
-    <div class="nav-brand">AVD<span class="dot">-</span>Scout</div>
-    <div class="nav-links">
-      <a href="#about">About</a>
-      <a href="#services">Services</a>
-      <a href="#value">Value</a>
-      <a href="#cases">Cases</a>
-      <a href="#contact">Contact</a>
+  <header class="hero">
+    <div class="brand">
+      <div class="brand-name">AVD<span class="dot">-</span>Scout</div>
+      <div class="brand-sub">Azure Virtual Desktop Health Report</div>
     </div>
-    <a class="nav-cta" href="#services">View findings</a>
-  </nav>
-
-  <header class="hero" id="about">
-    <div class="hero-copy">
-      <div class="eyebrow">Azure Virtual Desktop Health Report</div>
-      <h1>Transforming your AVD posture into clear action<span class="headline-accent">.</span></h1>
-      <p class="hero-sub">A premium, read-only assessment for secure access, resilient operations, and better digital workspace experience.</p>
-      <div class="hero-actions">
-        <a class="btn-primary" href="#services">Explore results</a>
-        <a class="btn-secondary" href="#cases">Review insights</a>
-      </div>
-    </div>
-    <div class="hero-visual" aria-label="Overall score visual">
-      <div class="orbit"></div>
-      <div class="score-panel">
-        $overallDonut
-        <div class="score-label">Overall Score</div>
-        <div class="big-score">$overallHtml $overallDeltaHtml</div>
+    <div class="overall">
+      $overallDonut
+      <div>
+        <div class="label">Overall Score</div>
+        <div class="big">$overallHtml $overallDeltaHtml</div>
       </div>
     </div>
   </header>
 
-  <div class="stats-strip" aria-label="Assessment metadata">
+  <div class="meta-bar">
     <div class="cell"><div class="meta-label">Subscription</div><div class="meta-value">$subName</div></div>
     <div class="cell"><div class="meta-label">Subscription ID</div><div class="meta-value">$subId</div></div>
     <div class="cell"><div class="meta-label">Tenant</div><div class="meta-value">$tenant</div></div>
@@ -3061,54 +3189,14 @@ footer a { color:var(--purple); text-decoration:none; font-weight:800; }
     $comparedCell
   </div>
 
-  <section class="section" id="services">
-    <div class="section-head">
-      <div>
-        <div class="section-kicker">Services</div>
-        <h2 class="section-title">Assessment pillars</h2>
-      </div>
-      <p class="section-sub">Five Well-Architected views of the same workspace environment, grouped so operations and security teams can act without reading raw Azure data.</p>
-    </div>
-    <div class="categories">
-      $cardCost
-      $cardRel
-      $cardSec
-      $cardOps
-      $cardPerf
-    </div>
-  </section>
+  <div class="categories">
+    $cardCost
+    $cardRel
+    $cardSec
+    $cardOps
+    $cardPerf
+  </div>
 $removedHtml
-
-  <section class="section" id="value">
-    <div class="section-head">
-      <div>
-        <div class="section-kicker">Business value</div>
-        <h2 class="section-title">Designed for decision makers and operators</h2>
-      </div>
-      <p class="section-sub">Concise outputs for executive conversations, with enough technical detail for the team that owns remediation.</p>
-    </div>
-    <div class="feature-grid">$featureCards</div>
-    <div class="value-grid" style="margin-top:20px;">$valueCards</div>
-  </section>
-
-  <section class="section" id="cases">
-    <div class="section-head">
-      <div>
-        <div class="section-kicker">Cases & insights</div>
-        <h2 class="section-title">What this run says</h2>
-      </div>
-      <p class="section-sub">A compact briefing layer over the detailed findings, useful for steering prioritization after the report is generated.</p>
-    </div>
-    <div class="insight-grid">$insightCards</div>
-  </section>
-
-  <section class="final-cta" id="contact">
-    <div>
-      <h2>Ready to improve the workspace experience?</h2>
-      <p>Use these findings to plan the next remediation sprint across secure access, performance, reliability, and operational governance.</p>
-    </div>
-    <a class="btn-primary" href="https://virtex.cloud" target="_blank" rel="noopener">Visit Virtex Cloud</a>
-  </section>
 
   <footer>
     AVD-Scout v$script:ToolVersion &middot;
