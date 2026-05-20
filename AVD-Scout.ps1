@@ -2693,7 +2693,7 @@ function New-CategoryCardHtml {
     if ($ManagedByNerdio) {
         $effective = Get-EffectiveCategoryScore -Category $Category
         if ($null -ne $effective -and $null -ne $score -and $effective -ne $score) {
-            $effectiveHtml = ('<div class="cat-effective">Nerdio effective: {0}/100</div>' -f $effective)
+            $effectiveHtml = ('<div class="cat-effective nerdio-extra">Nerdio effective: {0}/100</div>' -f $effective)
         }
     }
     $checks = @($script:Checks | Where-Object { $_.Category -eq $Category })
@@ -2720,11 +2720,11 @@ function New-CategoryCardHtml {
         $nerdioBadge = ''
         $nerdioNoteBlock = ''
         if (Test-NerdioCoveredCheck $c) {
-            $nerdioBadge = '<span class="badge-nerdio" title="Nerdio advisory coverage applied to the effective score">Nerdio-managed</span>'
+            $nerdioBadge = '<span class="badge-nerdio nerdio-extra" title="Nerdio advisory coverage applied to the effective score">Nerdio</span>'
             $note = ConvertTo-HtmlSafe (Get-NerdioCoverageNote $c)
             $effScore = Get-EffectiveCheckScore $c
             $nerdioNoteBlock = @"
-      <div class="nerdio-note">
+      <div class="nerdio-note nerdio-extra">
         <div class="nerdio-label">Nerdio advisory coverage</div>
         <div>$note Validate the corresponding Nerdio Manager policy/profile before treating this item as remediated. Native score remains $($c.Score)/100; Nerdio effective score is $effScore/100.</div>
       </div>
@@ -2915,12 +2915,26 @@ function New-HtmlReport {
     $overallDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall))
     $effectiveOverall = Get-EffectiveOverallScore
     $effectiveOverallHtml = ''
-    $nerdioNoticeHtml = ''
+    $nerdioToggleHtml = ''
+    $nerdioScriptHtml = ''
     if ($ManagedByNerdio) {
         $effText = if ($null -eq $effectiveOverall) { 'N/A' } else { ('{0}/100' -f $effectiveOverall) }
         $nativeText = if ($null -eq $overall) { 'N/A' } else { ('{0}/100' -f $overall) }
-        $effectiveOverallHtml = '<div class="effective-score"><span>Native Score</span><strong>{0}</strong><span>Effective Score with Nerdio</span><strong>{1}</strong></div>' -f $nativeText, $effText
-        $nerdioNoticeHtml = '<section class="nerdio-disclaimer"><strong>Nerdio-managed assessment mode.</strong> Native Azure Virtual Desktop control checks are preserved for Microsoft Well-Architected alignment. The effective score recognizes where Nerdio Manager may provide equivalent or advanced operational coverage, such as autoscale, host lifecycle, image management, and disk optimization.</section>'
+        $effectiveOverallHtml = '<div class="effective-score nerdio-extra"><span>Native Score</span><strong>{0}</strong><span>Nerdio Effective</span><strong>{1}</strong></div>' -f $nativeText, $effText
+        $nerdioToggleHtml = '<button type="button" class="nerdio-toggle" onclick="toggleNerdioOverlay()" aria-pressed="false">Nerdio Manager</button>'
+        $nerdioScriptHtml = @'
+<script>
+function toggleNerdioOverlay() {
+  document.body.classList.toggle('nerdio-visible');
+  var button = document.querySelector('.nerdio-toggle');
+  if (button) {
+    var enabled = document.body.classList.contains('nerdio-visible');
+    button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    button.textContent = enabled ? 'Hide Nerdio' : 'Nerdio Manager';
+  }
+}
+</script>
+'@
     }
     $generated = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss zzz')
 
@@ -2989,6 +3003,44 @@ header.hero {
   padding: 32px;
   margin-bottom: 20px;
 }
+
+.hero-action {
+  grid-column: 1;
+  justify-self: start;
+  align-self: start;
+}
+.nerdio-toggle {
+  appearance: none;
+  border: 1px solid rgba(78,41,160,0.18);
+  background: rgba(255,255,255,0.76);
+  color: #4e29a0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(78,41,160,0.08);
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+.nerdio-toggle:hover {
+  transform: translateY(-1px);
+  background: #fff;
+  border-color: rgba(78,41,160,0.34);
+  box-shadow: 0 12px 28px rgba(78,41,160,0.12);
+}
+.nerdio-toggle[aria-pressed="true"] {
+  color: #fff;
+  background: linear-gradient(135deg, #4e29a0, #14b8a6);
+  border-color: transparent;
+}
+.nerdio-extra { display: none !important; }
+body.nerdio-visible .nerdio-extra { display: inline-flex !important; }
+body.nerdio-visible .effective-score { display: grid !important; }
+body.nerdio-visible .cat-effective,
+body.nerdio-visible .nerdio-note { display: block !important; }
 
 .brand {
   display: flex;
@@ -3181,21 +3233,19 @@ header.hero {
 .delta-down { color: #ef4444; }
 .delta-same { color: #64748b; }
 .badge-nerdio {
-  display: inline-flex;
   align-items: center;
-  padding: 3px 9px;
-  border-radius: 12px;
-  font-size: 11px;
-  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   white-space: nowrap;
-  color: #0f766e;
-  background: rgba(20,184,166,0.12);
-  border: 1px solid rgba(20,184,166,0.35);
+  color: #4e29a0;
+  background: rgba(78,41,160,0.07);
+  border: 1px solid rgba(78,41,160,0.16);
 }
 .effective-score {
-  display: grid;
   grid-template-columns: auto auto;
   gap: 2px 10px;
   margin-top: 8px;
@@ -3209,20 +3259,9 @@ header.hero {
   font-weight: 700;
   margin-top: 5px;
 }
-.nerdio-disclaimer {
-  background: rgba(255,255,255,0.92);
-  border: 1px solid rgba(20,184,166,0.28);
-  border-left: 4px solid #14b8a6;
-  border-radius: 12px;
-  color: #334155;
-  font-size: 13px;
-  margin: -4px 0 20px;
-  padding: 14px 18px;
-}
-.nerdio-disclaimer strong { color: #0f766e; }
 .nerdio-note {
-  background: rgba(20,184,166,0.08);
-  border-left: 3px solid #14b8a6;
+  background: rgba(78,41,160,0.06);
+  border-left: 3px solid #4e29a0;
   padding: 12px 14px;
   border-radius: 4px;
   color: #0a0a0a;
@@ -3231,7 +3270,7 @@ header.hero {
 }
 .nerdio-label {
   font-size: 11px;
-  color: #0f766e;
+  color: #4e29a0;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -3327,7 +3366,7 @@ footer a { color: #4e29a0; text-decoration: none; }
 footer a:hover { color: #4e29a0; }
 @media (max-width: 760px) {
   header.hero { grid-template-columns: 1fr; justify-items: center; }
-  .brand, .overall { grid-column: 1; justify-self: center; }
+  .hero-action, .brand, .overall { grid-column: 1; justify-self: center; }
   .categories { grid-template-columns: 1fr; }
   .categories > .category-card,
   .categories > .category-card:nth-child(4),
@@ -3350,6 +3389,7 @@ footer a:hover { color: #4e29a0; }
 <body>
 <div class="container">
   <header class="hero">
+    <div class="hero-action">$nerdioToggleHtml</div>
     <div class="brand">
       <div class="brand-name">AVD<span class="wordmark-space"></span>SCOUT</div>
       <div class="brand-sub">Azure Virtual Desktop Health Report</div>
@@ -3363,8 +3403,6 @@ footer a:hover { color: #4e29a0; }
       </div>
     </div>
   </header>
-
-  $nerdioNoticeHtml
 
   <div class="meta-bar">
     <div class="cell"><div class="meta-label">Subscription</div><div class="meta-value">$subName</div></div>
@@ -3391,7 +3429,7 @@ $removedHtml
     <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Scout</a>
   </footer>
 </div>
-
+$nerdioScriptHtml
 </body>
 </html>
 "@
