@@ -1,6 +1,6 @@
 # AVD-Assess
 
-**A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 25 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance. Optionally emits machine-readable JSON, compares a run to a previous one to show whether scores are improving, and sweeps every accessible subscription in a single pass.
+**A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 29 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance. Optionally emits machine-readable JSON, compares a run to a previous one to show whether scores are improving, and sweeps every accessible subscription in a single pass.
 
 ## Why this exists
 
@@ -10,15 +10,15 @@ There is no free, open-source, automated health checker for AVD. Microsoft's Wel
 
 ## What it checks
 
-**Cost Optimisation** — scaling plan coverage on pooled host pools; Start VM on Connect across both personal and pooled pools (scaling-plan-aware scoring); unhealthy hosts still in session rotation; max session limit configuration.
+**Cost Optimisation** — scaling plan coverage on pooled host pools; Start VM on Connect across both personal and pooled pools (scaling-plan-aware scoring); unhealthy hosts still in session rotation; max session limit configuration; dynamic autoscaling readiness for 2026 elastic pools.
 
-**Reliability & Resilience** — session host health; RDP Shortpath / network auto-detect configuration; agent update ring split (validation vs production); session capacity headroom; FSLogix profile redundancy (zone-redundant storage SKU); availability zone distribution across multi-host pooled pools.
+**Reliability & Resilience** — session host health; modern RDP transport readiness (Shortpath, UDP/network auto-detect, and Multipath signals); agent update ring split (validation vs production); session capacity headroom; FSLogix profile redundancy (zone-redundant storage SKU); availability zone distribution across multi-host pooled pools.
 
-**Security Posture** — drive redirection policy; clipboard redirection review; Trusted Launch / Secure Boot; Entra ID join status (with hybrid vs cloud-only FSLogix support matrix); Microsoft Defender for Cloud coverage (Servers + Storage plans); AVD Private Link / public network access on host pools.
+**Security Posture** — drive redirection policy; clipboard redirection review; 2025+ client redirection hardening across clipboard, drive, printer, and USB redirection; Trusted Launch / Secure Boot; Entra ID join status (with hybrid vs cloud-only FSLogix support matrix); Microsoft Defender for Cloud coverage (Servers + Storage plans); AVD Private Link / public network access on host pools.
 
-**Operational Excellence** — diagnostic settings sending to a Log Analytics workspace; resource tagging (Environment, Owner); AVD agent update state; Azure Service Health alerts covering AVD; load balancing algorithm review.
+**Operational Excellence** — diagnostic settings sending to a Log Analytics workspace; resource tagging (Environment, Owner); AVD agent update state; Azure Service Health alerts covering AVD; load balancing algorithm review; Azure Virtual Desktop Classic retirement readiness before 30 September 2026.
 
-**Performance Efficiency** — Accelerated Networking on session host NICs; OS disk performance tier (Premium SSD or better on multi-session hosts); VM generation (Gen2); FSLogix region colocation between host pool and profile storage.
+**Performance Efficiency** — Accelerated Networking on session host NICs; OS disk performance tier (Premium SSD or better on multi-session hosts); VM generation (Gen2); session host platform currency for Windows 11 24H2 / Windows Server 2025 baselines; FSLogix region colocation between host pool and profile storage.
 
 Every finding names the affected resources, explains the fix in concrete terms, and links to the relevant Microsoft Learn article.
 
@@ -46,7 +46,7 @@ cd AVD-Assess
 ./AVD-Assess.ps1 -OpenReport
 ```
 
-The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 25 checks, and writes `AVD-Assess-Report-<timestamp>.html` to the current directory.
+The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 29 checks, and writes `AVD-Assess-Report-<timestamp>.html` to the current directory.
 
 ## Running from Azure Cloud Shell
 

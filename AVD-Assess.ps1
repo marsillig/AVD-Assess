@@ -204,6 +204,13 @@ $script:CheckCatalog = @{
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/configure-host-pool-load-balancing'
     }
 
+
+    DynamicAutoscaleReadiness = [PSCustomObject]@{
+        Name        = 'Dynamic Autoscaling Readiness'
+        Remediation = 'Review pooled host pools for Azure Virtual Desktop dynamic autoscaling. Dynamic autoscaling works with session host configuration to create and delete session hosts based on demand, instead of only starting and stopping a fixed VM fleet. It is best suited to elastic pooled pools where session hosts are disposable and image/deployment automation is mature. Keep classic power-management scaling plans for stateful or manually managed pools, but document that trade-off.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/autoscale-create-assign-scaling-plan'
+    }
+
     # ---- Reliability & Resilience ----
     SessionHostHealth = [PSCustomObject]@{
         Name        = 'Session Host Health'
@@ -212,9 +219,9 @@ $script:CheckCatalog = @{
     }
 
     RdpShortpath = [PSCustomObject]@{
-        Name        = 'RDP Shortpath / Network Auto-Detect'
-        Remediation = 'Add networkautodetect:i:1 and bandwidthautodetect:i:1 to the Custom RDP Properties of each host pool. These settings enable RDP Shortpath (UDP), which provides significantly lower latency, better audio/video quality, and improved session resilience compared to the TCP Reverse Connect fallback. Also ensure UDP port 3478 (STUN) is permitted outbound at the firewall for public network Shortpath.'
-        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/rdp-shortpath'
+        Name        = 'Modern RDP Transport'
+        Remediation = 'Enable modern AVD transport for every host pool: keep networkautodetect:i:1 and bandwidthautodetect:i:1 in Custom RDP Properties, allow UDP outbound for RDP Shortpath, and review host pool networking settings for Shortpath public or managed networks. Where available, enable RDP Multipath to improve session resilience across multiple network paths. If a strict firewall blocks UDP, document the exception and expected TCP fallback experience.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/configure-rdp-shortpath'
     }
 
     AgentUpdateRing = [PSCustomObject]@{
@@ -242,6 +249,13 @@ $script:CheckCatalog = @{
     ClipboardRedirection = [PSCustomObject]@{
         Name        = 'Clipboard Redirection Policy'
         Remediation = 'If clipboard access is not required for user productivity or is prohibited by your data security policy, set redirectclipboard:i:0 in host pool RDP properties. This is particularly important for environments handling sensitive personal or financial data where copy/paste to local devices would represent a compliance risk.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/rdp-properties'
+    }
+
+
+    ClientRedirectionHardening = [PSCustomObject]@{
+        Name        = 'Client Redirection Hardening'
+        Remediation = 'Align host pools to the newer secure-by-default redirection posture: explicitly disable clipboard (redirectclipboard:i:0), drive (drivestoredirect:s:), printer (redirectprinters:i:0), and low-level USB redirection (usbdevicestoredirect:s:) unless there is a documented business need. Use separate host pools or Conditional Access/device controls for exception groups rather than broadly enabling redirection on production pools.'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/rdp-properties'
     }
 
@@ -298,6 +312,13 @@ $script:CheckCatalog = @{
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/set-up-service-alerts'
     }
 
+
+    AvdClassicRetirement = [PSCustomObject]@{
+        Name        = 'AVD Classic Retirement Readiness'
+        Remediation = 'Azure Virtual Desktop Classic retires on 30 September 2026. Confirm that any remaining classic tenants, host pools, app groups, or workspaces have been migrated to the current Azure Resource Manager-based Azure Virtual Desktop service. This script does not add classic-module dependencies, so treat this as a manual governance checkpoint if classic resources are still managed outside ARM.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/whats-new'
+    }
+
     LoadBalancingAlgorithm = [PSCustomObject]@{
         Name        = 'Load Balancing Algorithm'
         Remediation = 'BreadthFirst is recommended when user experience is the top priority - each user gets more dedicated resources. DepthFirst is recommended when cost is the priority and the workload is not resource-intensive - it allows more VMs to be fully shut down during off-peak hours. Review your choice against your scaling plan configuration: DepthFirst works best with aggressive scale-in, BreadthFirst pairs well with reserved instances on a core set of always-on hosts.'
@@ -321,6 +342,13 @@ $script:CheckCatalog = @{
         Name        = 'VM Generation (Gen2)'
         Remediation = 'Plan a refresh of any Gen1 session host VMs to Gen2 images. Gen1 blocks Trusted Launch, Confidential VMs, vTPM, and several Windows 11 features, and indicates the underlying image lineage is stale (Azure has defaulted to Gen2 since 2022). Generation is set at deployment time and cannot be changed in place - the migration path is to deploy fresh session hosts from a Gen2-based image, drain the Gen1 hosts, then retire them. If your image build pipeline still produces Gen1, update the source image SKU to a Gen2 equivalent (most marketplace images now offer a "-g2" variant).'
         LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-machines/generation-2'
+    }
+
+
+    SessionHostPlatformCurrency = [PSCustomObject]@{
+        Name        = 'Session Host Platform Currency'
+        Remediation = 'Refresh stale session host images to a currently supported AVD platform baseline. Prefer Windows 11 Enterprise multi-session 24H2 for new pooled desktop deployments, or Windows Server 2025 where a server OS is required. Keep Windows 10 Enterprise multi-session and older Windows Server images only where application compatibility requires them, and document the lifecycle and migration path.'
+        LearnMore   = 'https://learn.microsoft.com/en-us/azure/virtual-desktop/whats-new'
     }
 
     FSLogixRegionColocation = [PSCustomObject]@{
@@ -438,6 +466,26 @@ function Get-RdpProperty {
         if ($parts.Count -ge 3) { return $parts[2] }
     }
     return $null
+}
+
+function Get-ObjectPropertyValue {
+    # Safely reads properties whose availability varies across Az module/API versions.
+    param(
+        [Parameter(Mandatory)]$InputObject,
+        [Parameter(Mandatory)][string[]]$PropertyNames
+    )
+    foreach ($name in $PropertyNames) {
+        if ($null -ne $InputObject -and $null -ne $InputObject.PSObject.Properties[$name]) {
+            return $InputObject.PSObject.Properties[$name].Value
+        }
+    }
+    return $null
+}
+
+function Test-RdpPropertyDisabled {
+    param([string]$RdpString, [string]$PropertyName)
+    $v = Get-RdpProperty -RdpString $RdpString -PropertyName $PropertyName
+    return ($null -ne $v -and ($v -eq '0' -or [string]::IsNullOrWhiteSpace($v)))
 }
 
 function Get-RgFromArmId {
@@ -633,6 +681,11 @@ function Initialize-DryRunData {
         -Finding '1 pooled host pool is at the default session limit (999999): hp-dev-pooled-01.' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
+    $m = Get-Check 'DynamicAutoscaleReadiness'
+    Add-CheckResult -Category Cost -CheckName $m.Name -Status Warning -Score 60 `
+        -Finding '3 of 5 pooled host pool(s) use traditional fixed-fleet scaling plans only. Dynamic autoscaling may be suitable for elastic pools with image-based session host configuration: hp-prod-pooled-02, hp-prod-pooled-04, hp-dev-pooled-01.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
     Write-Section 'Reliability & Resilience'
     $m = Get-Check 'SessionHostHealth'
     Add-CheckResult -Category Reliability -CheckName $m.Name -Status Fail -Score 80 `
@@ -641,7 +694,7 @@ function Initialize-DryRunData {
 
     $m = Get-Check 'RdpShortpath'
     Add-CheckResult -Category Reliability -CheckName $m.Name -Status Warning -Score 50 `
-        -Finding '3 of 5 host pool(s) are missing explicit networkautodetect / bandwidthautodetect RDP properties.' `
+        -Finding '3 of 5 host pool(s) are not fully ready for modern RDP transport. Missing RDP auto-detect settings: hp-prod-pooled-01, hp-dev-pooled-01. RDP Multipath not detected on: hp-prod-pooled-01, hp-dev-pooled-01, hp-personal-exec.' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'AgentUpdateRing'
@@ -673,6 +726,11 @@ function Initialize-DryRunData {
     $m = Get-Check 'ClipboardRedirection'
     Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
         -Finding '4 host pool(s) have clipboard redirection enabled (or at default). This is common but should be a deliberate decision.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
+    $m = Get-Check 'ClientRedirectionHardening'
+    Add-CheckResult -Category Security -CheckName $m.Name -Status Warning -Score 40 `
+        -Finding '2 of 5 host pool(s) explicitly disable clipboard, drive, printer, and low-level USB redirection (40%). Not hardened: hp-prod-pooled-01, hp-dev-pooled-01, hp-personal-exec.' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'TrustedLaunch'
@@ -721,6 +779,11 @@ function Initialize-DryRunData {
         -Finding '3 pool(s) use BreadthFirst (performance-optimised), 1 pool(s) use DepthFirst (cost-optimised).' `
         -Remediation $m.Remediation -LearnMore $m.LearnMore
 
+    $m = Get-Check 'AvdClassicRetirement'
+    Add-CheckResult -Category Operations -CheckName $m.Name -Status Info -Score 100 `
+        -Finding 'Manual checkpoint: Azure Virtual Desktop Classic resources are not enumerated by this ARM-based assessment. Confirm no classic AVD tenants or host pools remain before the 30 September 2026 retirement.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
+
     Write-Section 'Performance Efficiency'
     $m = Get-Check 'AcceleratedNetworking'
     Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 60 `
@@ -736,6 +799,11 @@ function Initialize-DryRunData {
     Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
         -Finding 'All 5 session host(s) are Gen2 VMs.' `
         -Remediation '' -LearnMore $m.LearnMore
+
+    $m = Get-Check 'SessionHostPlatformCurrency'
+    Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 60 `
+        -Finding '3 of 5 session host VM image references are on current 2026-ready baselines (Windows 11 24H2 or Windows Server 2025). Stale/unknown images: avd-prod-vm-04 (win10-22h2-avd), avd-dev-vm-01 (2019-datacenter).' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
 
     $m = Get-Check 'FSLogixRegionColocation'
     Add-CheckResult -Category Performance -CheckName $m.Name -Status Warning -Score 67 `
@@ -1365,6 +1433,52 @@ function Invoke-CostChecks {
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
+
+    # 2026 readiness: dynamic autoscaling / session host configuration.
+    # Az.DesktopVirtualization surfaces these properties differently across
+    # versions, so this is deliberately advisory: it recognises evidence of
+    # dynamic/session-host-configuration usage when present, and otherwise
+    # flags fixed-fleet pooled pools as candidates rather than failures.
+    $m = Get-Check 'DynamicAutoscaleReadiness'
+    if ($script:pooledHostPools.Count -eq 0) {
+        Add-CheckResult -Category Cost -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'No pooled host pools found. Dynamic autoscaling applies to pooled elastic capacity.' `
+            -Remediation 'No action required.' -LearnMore $m.LearnMore
+    } else {
+        $coveredByScalingPlan = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($plan in $script:allScalingPlans) {
+            foreach ($ref in @($plan.HostPoolReference)) {
+                if ($ref.HostPoolArmPath) { [void]$coveredByScalingPlan.Add($ref.HostPoolArmPath) }
+            }
+        }
+
+        $dynamicReady = [System.Collections.Generic.List[string]]::new()
+        $fixedFleet   = [System.Collections.Generic.List[string]]::new()
+        foreach ($hp in $script:pooledHostPools) {
+            $sessionHostConfig = Get-ObjectPropertyValue -InputObject $hp -PropertyNames @('SessionHostConfiguration','SessionHostManagement','AgentUpdateSessionHostConfiguration')
+            $managementType    = Get-ObjectPropertyValue -InputObject $hp -PropertyNames @('SessionHostManagementType','ManagementType','HostPoolManagementType')
+            $hasDynamicSignal  = $sessionHostConfig -or ($managementType -and ($managementType -match '(?i)dynamic|automatic|sessionhost'))
+            if ($hasDynamicSignal) {
+                $dynamicReady.Add($hp.Name)
+            } else {
+                $suffix = if ($coveredByScalingPlan.Contains($hp.Id)) { 'fixed scaling plan' } else { 'no scaling plan' }
+                $fixedFleet.Add(('{0} ({1})' -f $hp.Name, $suffix))
+            }
+        }
+
+        if ($fixedFleet.Count -eq 0) {
+            Add-CheckResult -Category Cost -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} pooled host pool(s) expose session host configuration / dynamic management signals." -f $script:pooledHostPools.Count) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $pct = [int][math]::Round(($dynamicReady.Count / $script:pooledHostPools.Count) * 100)
+            $shown = ($fixedFleet | Select-Object -First 5) -join '; '
+            $more  = if ($fixedFleet.Count -gt 5) { (" (+{0} more)" -f ($fixedFleet.Count - 5)) } else { '' }
+            Add-CheckResult -Category Cost -CheckName $m.Name -Status Warning -Score $pct `
+                -Finding ("{0} of {1} pooled host pool(s) show dynamic/session-host-configuration readiness ({2}%). Review fixed-fleet candidates: {3}{4}." -f $dynamicReady.Count, $script:pooledHostPools.Count, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
 }
 
 # ==============================================================================
@@ -1398,21 +1512,37 @@ function Invoke-ReliabilityChecks {
         }
     }
 
-    # Check 6: RDP Shortpath / network auto-detect
+    # Check 6: Modern RDP transport (Shortpath + Multipath readiness)
     $m = Get-Check 'RdpShortpath'
-    $missing = @($script:allHostPools | Where-Object {
+    $missingAutoDetect = @($script:allHostPools | Where-Object {
         $nad = Get-RdpProperty -RdpString $_.CustomRdpProperty -PropertyName 'networkautodetect'
         $bad = Get-RdpProperty -RdpString $_.CustomRdpProperty -PropertyName 'bandwidthautodetect'
         ($nad -ne '1') -or ($bad -ne '1')
     })
-    if ($missing.Count -eq 0) {
+
+    $missingMultipath = [System.Collections.Generic.List[string]]::new()
+    foreach ($hp in $script:allHostPools) {
+        $mp = Get-RdpProperty -RdpString $hp.CustomRdpProperty -PropertyName 'rdpmultipath'
+        $transport = Get-ObjectPropertyValue -InputObject $hp -PropertyNames @('ManagedPrivateUdp','PublicUdp','ShortpathPublicNetwork','ShortpathManagedNetwork','NetworkAccess')
+        if (($mp -ne '1') -and (-not ($transport -and ($transport.ToString() -match '(?i)shortpath|udp|multipath|enabled')))) {
+            $missingMultipath.Add($hp.Name)
+        }
+    }
+
+    $notReadyNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($hp in $missingAutoDetect) { [void]$notReadyNames.Add($hp.Name) }
+    foreach ($name in $missingMultipath) { [void]$notReadyNames.Add($name) }
+
+    if ($notReadyNames.Count -eq 0) {
         Add-CheckResult -Category Reliability -CheckName $m.Name -Status Pass -Score 100 `
-            -Finding ("All {0} host pool(s) have network auto-detect properties set for RDP Shortpath." -f $script:allHostPools.Count) `
+            -Finding ("All {0} host pool(s) have RDP auto-detect settings and expose modern transport readiness signals for Shortpath / Multipath." -f $script:allHostPools.Count) `
             -Remediation '' -LearnMore $m.LearnMore
     } else {
-        $names = ($missing | ForEach-Object { $_.Name }) -join ', '
-        Add-CheckResult -Category Reliability -CheckName $m.Name -Status Warning -Score 50 `
-            -Finding ("{0} of {1} host pool(s) missing explicit networkautodetect / bandwidthautodetect: {2}." -f $missing.Count, $script:allHostPools.Count, $names) `
+        $pct = [int][math]::Round((($script:allHostPools.Count - $notReadyNames.Count) / $script:allHostPools.Count) * 100)
+        $autoNames = if ($missingAutoDetect.Count -gt 0) { ($missingAutoDetect | ForEach-Object { $_.Name } | Select-Object -First 5) -join ', ' } else { 'none' }
+        $multiNames = if ($missingMultipath.Count -gt 0) { ($missingMultipath | Select-Object -First 5) -join ', ' } else { 'none' }
+        Add-CheckResult -Category Reliability -CheckName $m.Name -Status Warning -Score $pct `
+            -Finding ("{0} of {1} host pool(s) are fully ready for modern RDP transport ({2}%). Missing network/bandwidth auto-detect: {3}. RDP Multipath/UDP readiness not detected: {4}." -f ($script:allHostPools.Count - $notReadyNames.Count), $script:allHostPools.Count, $pct, $autoNames, $multiNames) `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
     }
 
@@ -1639,6 +1769,39 @@ function Invoke-SecurityChecks {
     } else {
         Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
             -Finding ("{0} host pool(s) have clipboard redirection enabled (or at default). This is common but should be a deliberate decision." -f $clip.Count) `
+            -Remediation $m.Remediation -LearnMore $m.LearnMore
+    }
+
+    # 2025+ secure-by-default baseline: explicitly disable broad client
+    # redirections unless there is a documented exception.
+    $m = Get-Check 'ClientRedirectionHardening'
+    $notHardened = [System.Collections.Generic.List[string]]::new()
+    foreach ($hp in $script:allHostPools) {
+        $clipboardOff = Test-RdpPropertyDisabled -RdpString $hp.CustomRdpProperty -PropertyName 'redirectclipboard'
+        $driveOff     = Test-RdpPropertyDisabled -RdpString $hp.CustomRdpProperty -PropertyName 'drivestoredirect'
+        $printerOff   = Test-RdpPropertyDisabled -RdpString $hp.CustomRdpProperty -PropertyName 'redirectprinters'
+        $usbOff       = Test-RdpPropertyDisabled -RdpString $hp.CustomRdpProperty -PropertyName 'usbdevicestoredirect'
+        if (-not ($clipboardOff -and $driveOff -and $printerOff -and $usbOff)) {
+            $gaps = [System.Collections.Generic.List[string]]::new()
+            if (-not $clipboardOff) { $gaps.Add('clipboard') }
+            if (-not $driveOff)     { $gaps.Add('drive') }
+            if (-not $printerOff)   { $gaps.Add('printer') }
+            if (-not $usbOff)       { $gaps.Add('USB') }
+            $notHardened.Add(('{0} ({1})' -f $hp.Name, ($gaps -join '/')))
+        }
+    }
+    if ($notHardened.Count -eq 0) {
+        Add-CheckResult -Category Security -CheckName $m.Name -Status Pass -Score 100 `
+            -Finding ("All {0} host pool(s) explicitly disable clipboard, drive, printer, and low-level USB redirection." -f $script:allHostPools.Count) `
+            -Remediation '' -LearnMore $m.LearnMore
+    } else {
+        $hardened = $script:allHostPools.Count - $notHardened.Count
+        $pct = [int][math]::Round(($hardened / $script:allHostPools.Count) * 100)
+        $shown = ($notHardened | Select-Object -First 5) -join '; '
+        $more  = if ($notHardened.Count -gt 5) { (" (+{0} more)" -f ($notHardened.Count - 5)) } else { '' }
+        $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+        Add-CheckResult -Category Security -CheckName $m.Name -Status $status -Score $pct `
+            -Finding ("{0} of {1} host pool(s) meet the hardened redirection baseline ({2}%). Not hardened: {3}{4}." -f $hardened, $script:allHostPools.Count, $pct, $shown, $more) `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
     }
 
@@ -1995,6 +2158,14 @@ function Invoke-OperationsChecks {
             -Finding ("Load balancing review: {0} pool(s) use BreadthFirst (performance-optimised - spreads users across more VMs), {1} pool(s) use DepthFirst (cost-optimised - fills VMs before starting new ones)." -f $bf, $df) `
             -Remediation $m.Remediation -LearnMore $m.LearnMore
     }
+
+    # 2026 retirement awareness. Classic AVD is not an ARM resource type and
+    # would require legacy modules/API dependencies, so keep this as an
+    # explicit governance checkpoint rather than silently pretending to scan it.
+    $m = Get-Check 'AvdClassicRetirement'
+    Add-CheckResult -Category Operations -CheckName $m.Name -Status Info -Score 100 `
+        -Finding 'Manual checkpoint: this ARM-based assessment found current Azure Virtual Desktop resources only. Confirm no Azure Virtual Desktop Classic tenants, host pools, app groups, or workspaces remain before the 30 September 2026 retirement date.' `
+        -Remediation $m.Remediation -LearnMore $m.LearnMore
 }
 
 # ==============================================================================
@@ -2163,6 +2334,48 @@ function Invoke-PerformanceChecks {
             $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
             Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
                 -Finding ("{0} of {1} session host(s) are Gen2 VMs ({2}%). Gen1 hosts: {3}{4}." -f $ok, $total, $pct, $shown, $more) `
+                -Remediation $m.Remediation -LearnMore $m.LearnMore
+        }
+    }
+
+    # 2026 platform currency: advisory check based on VM image reference.
+    # Marketplace SKUs vary, so treat Windows 11 24H2 and Windows Server 2025
+    # as current baselines and flag older/unknown image references for review.
+    $m = Get-Check 'SessionHostPlatformCurrency'
+    if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
+        Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
+            -Finding 'Unable to retrieve VM image references - platform currency could not be evaluated.' `
+            -Remediation 'Grant Reader access to the VM resource groups so AVD-Assess can inspect VM storage profile image references.' `
+            -LearnMore $m.LearnMore
+    } else {
+        $current = [System.Collections.Generic.List[string]]::new()
+        $stale   = [System.Collections.Generic.List[string]]::new()
+        foreach ($vm in $script:allVMs) {
+            $img = $vm.StorageProfile.ImageReference
+            $publisher = if ($img -and $img.Publisher) { $img.Publisher } else { '' }
+            $offer     = if ($img -and $img.Offer)     { $img.Offer }     else { '' }
+            $sku       = if ($img -and $img.Sku)       { $img.Sku }       else { '' }
+            $version   = if ($img -and $img.Version)   { $img.Version }   else { '' }
+            $ref = (@($publisher,$offer,$sku,$version) | Where-Object { $_ }) -join '/'
+            if (-not $ref) { $ref = 'custom/unknown image' }
+            if ($ref -match '(?i)(win(dows)?-?11|win11).*(24h2)' -or $ref -match '(?i)(server|windowsserver).*(2025)') {
+                $current.Add(('{0} ({1})' -f $vm.Name, $sku))
+            } else {
+                $stale.Add(('{0} ({1})' -f $vm.Name, $ref))
+            }
+        }
+
+        if ($stale.Count -eq 0) {
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status Pass -Score 100 `
+                -Finding ("All {0} session host VM image references align to Windows 11 24H2 or Windows Server 2025 baselines." -f $script:allVMs.Count) `
+                -Remediation '' -LearnMore $m.LearnMore
+        } else {
+            $pct = [int][math]::Round(($current.Count / $script:allVMs.Count) * 100)
+            $shown = ($stale | Select-Object -First 5) -join '; '
+            $more  = if ($stale.Count -gt 5) { (" (+{0} more)" -f ($stale.Count - 5)) } else { '' }
+            $status = if ($pct -lt 50) { 'Fail' } else { 'Warning' }
+            Add-CheckResult -Category Performance -CheckName $m.Name -Status $status -Score $pct `
+                -Finding ("{0} of {1} session host VM image references are on current 2026-ready baselines ({2}%). Stale/unknown images: {3}{4}." -f $current.Count, $script:allVMs.Count, $pct, $shown, $more) `
                 -Remediation $m.Remediation -LearnMore $m.LearnMore
         }
     }
