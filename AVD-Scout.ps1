@@ -2906,14 +2906,15 @@ function New-JsonReport {
 
 function New-HtmlReport {
     $overall = Get-OverallScore
-    $overallDonut = New-DonutSvg -Score $overall -Size 140
-    $overallHtml = if ($null -eq $overall) {
+    $effectiveOverall = Get-EffectiveOverallScore
+    $displayOverall = if ($ManagedByNerdio -and $null -ne $effectiveOverall) { $effectiveOverall } else { $overall }
+    $overallDonut = New-DonutSvg -Score $displayOverall -Size 140
+    $overallHtml = if ($null -eq $displayOverall) {
         '<span class="overall-na">N/A</span>'
     } else {
-        "$overall<span class=""suffix"">/100</span>"
+        "$displayOverall<span class=""suffix"">/100</span>"
     }
-    $overallDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall))
-    $effectiveOverall = Get-EffectiveOverallScore
+    $overallDeltaHtml = if ($ManagedByNerdio) { '' } else { New-DeltaBadgeHtml (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall)) }
     $effectiveOverallHtml = ''
     $nerdioToggleHtml = ''
     $nerdioScriptHtml = ''
