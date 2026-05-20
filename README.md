@@ -2,8 +2,6 @@
 
 **AVD-Scout is an Azure Virtual Desktop assessment tool for consultants and operators.** It connects to an Azure subscription, runs **29 read-only best-practice checks** across the five [Microsoft Well-Architected Framework pillars for Azure Virtual Desktop](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/), and generates a shareable HTML report plus optional JSON for trend tracking and automation.
 
-AVD-Scout is Gonzalo Marsilli's renamed fork of the original [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess) project by Wayne Bellows. This fork keeps the original MIT-licensed foundation and adds Cloud Shell fixes, 2026 AVD readiness checks, Virtex styling, updated report branding, and fork-specific usage paths.
-
 ![AVD-Scout Report](docs/screenshot.png)
 
 ## What this fork adds
