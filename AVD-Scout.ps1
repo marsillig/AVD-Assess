@@ -2477,15 +2477,50 @@ function Get-OverallScore {
 # ==============================================================================
 
 $script:NerdioCoverageByCheckId = @{
-    ScalingPlanCoverage        = 'Validate the matching Nerdio autoscale profile for this host pool. Nerdio Manager can provide advanced autoscale coverage even when native Azure scaling plans are not the primary control.'
-    DynamicAutoscaleReadiness  = 'Validate the Nerdio autoscale profile and host pool model. Nerdio-managed dynamic host pools can provide equivalent or advanced grow/shrink lifecycle management.'
-    StartVmOnConnect           = 'Validate the Nerdio autoscale schedule and after-hours start behavior. Nerdio can manage power state and capacity without relying solely on native Start VM on Connect.'
-    MaxSessionLimit            = 'Validate Nerdio autoscale thresholds and host pool capacity limits. Nerdio can manage scale decisions from session demand and related capacity signals.'
-    UnhealthyHostsInRotation   = 'Validate Nerdio auto-heal and host lifecycle policies. Nerdio can detect, repair, drain, or replace unhealthy session hosts outside this native check.'
-    SessionCapacityHeadroom    = 'Validate Nerdio autoscale capacity rules. Nerdio can add or start hosts based on demand to maintain user capacity headroom.'
-    LoadBalancingAlgorithm     = 'Validate the Nerdio host pool autoscale design. Nerdio can coordinate load balancing behavior with power and capacity management.'
-    PremiumOsDisk              = 'Validate Nerdio OS disk cost optimization settings. Nerdio can change stopped/running OS disk SKU or size as part of autoscale policy.'
-    SessionHostPlatformCurrency = 'Validate Nerdio image and host lifecycle policy. Nerdio can manage image rollout and session host refresh workflows.'
+    ScalingPlanCoverage = [PSCustomObject]@{
+        Note = 'Validate the matching Nerdio autoscale profile for this host pool. Nerdio Manager can provide advanced autoscale coverage even when native Azure scaling plans are not the primary control.'
+        AffectsEffectiveScore = $true
+    }
+    DynamicAutoscaleReadiness = [PSCustomObject]@{
+        Note = 'Validate the Nerdio autoscale profile and host pool model. Nerdio-managed dynamic host pools can provide equivalent or advanced grow/shrink lifecycle management.'
+        AffectsEffectiveScore = $true
+    }
+    StartVmOnConnect = [PSCustomObject]@{
+        Note = 'Validate the Nerdio autoscale schedule and after-hours start behavior. Nerdio can manage power state and capacity without relying solely on native Start VM on Connect.'
+        AffectsEffectiveScore = $true
+    }
+    MaxSessionLimit = [PSCustomObject]@{
+        Note = 'Validate Nerdio autoscale thresholds and host pool capacity limits. Nerdio can manage scale decisions from session demand and related capacity signals.'
+        AffectsEffectiveScore = $true
+    }
+    UnhealthyHostsInRotation = [PSCustomObject]@{
+        Note = 'Validate Nerdio auto-heal and host lifecycle policies. Nerdio can detect, repair, drain, or replace unhealthy session hosts outside this native check.'
+        AffectsEffectiveScore = $true
+    }
+    SessionCapacityHeadroom = [PSCustomObject]@{
+        Note = 'Validate Nerdio autoscale capacity rules. Nerdio can add or start hosts based on demand to maintain user capacity headroom.'
+        AffectsEffectiveScore = $true
+    }
+    LoadBalancingAlgorithm = [PSCustomObject]@{
+        Note = 'Validate the Nerdio host pool autoscale design. Nerdio can coordinate load balancing behavior with power and capacity management.'
+        AffectsEffectiveScore = $true
+    }
+    PremiumOsDisk = [PSCustomObject]@{
+        Note = 'Validate Nerdio OS disk cost optimization settings. Nerdio can change stopped/running OS disk SKU or size as part of autoscale policy.'
+        AffectsEffectiveScore = $true
+    }
+    SessionHostPlatformCurrency = [PSCustomObject]@{
+        Note = 'Validate Nerdio image and host lifecycle policy. Nerdio can manage image rollout and session host refresh workflows.'
+        AffectsEffectiveScore = $true
+    }
+    ServiceHealthAlerts = [PSCustomObject]@{
+        Note = 'Validate whether Nerdio-managed alerting, ticketing, or operational notification workflows cover Azure Virtual Desktop service health events. This advisory does not replace the native Azure Service Health alert check unless that process is documented and tested.'
+        AffectsEffectiveScore = $false
+    }
+    AvailabilityZoneDistribution = [PSCustomObject]@{
+        Note = 'Validate Nerdio tagging and host placement standards for availability zone distribution. Nerdio tags may document intended placement or automation ownership, but zone resilience should still be confirmed against the deployed session host VMs.'
+        AffectsEffectiveScore = $false
+    }
 }
 
 function Test-NerdioCoveredCheck {
@@ -2495,16 +2530,29 @@ function Test-NerdioCoveredCheck {
     return $script:NerdioCoverageByCheckId.ContainsKey($id)
 }
 
-function Get-NerdioCoverageNote {
+function Get-NerdioCoverageMetadata {
     param($Check)
     $id = [string](Get-CheckId $Check)
     if ($script:NerdioCoverageByCheckId.ContainsKey($id)) { return $script:NerdioCoverageByCheckId[$id] }
+    return $null
+}
+
+function Get-NerdioCoverageNote {
+    param($Check)
+    $metadata = Get-NerdioCoverageMetadata $Check
+    if ($metadata) { return [string]$metadata.Note }
     return ''
+}
+
+function Test-NerdioAffectsEffectiveScore {
+    param($Check)
+    $metadata = Get-NerdioCoverageMetadata $Check
+    return ($null -ne $metadata -and [bool]$metadata.AffectsEffectiveScore)
 }
 
 function Get-EffectiveCheckScore {
     param($Check)
-    if ((Test-NerdioCoveredCheck $Check) -and $Check.Status -ne 'Info') { return 100 }
+    if ((Test-NerdioCoveredCheck $Check) -and (Test-NerdioAffectsEffectiveScore $Check) -and $Check.Status -ne 'Info') { return 100 }
     return [int]$Check.Score
 }
 
@@ -2843,11 +2891,16 @@ function New-JsonReport {
             learnMore   = $c.LearnMore
         }
         if ($ManagedByNerdio -and (Test-NerdioCoveredCheck $c)) {
-            $row['nerdioCoverage'] = [ordered]@{
-                covered        = $true
-                effectiveScore = Get-EffectiveCheckScore $c
-                note           = Get-NerdioCoverageNote $c
+            $affectsEffectiveScore = Test-NerdioAffectsEffectiveScore $c
+            $coverage = [ordered]@{
+                covered               = $true
+                affectsEffectiveScore = $affectsEffectiveScore
+                note                  = Get-NerdioCoverageNote $c
             }
+            if ($affectsEffectiveScore) {
+                $coverage['effectiveScore'] = Get-EffectiveCheckScore $c
+            }
+            $row['nerdioCoverage'] = $coverage
         }
         if ($script:Compare) {
             $prev = $script:Compare.ChecksById[[string]$id]
