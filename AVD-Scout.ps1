@@ -2722,11 +2722,10 @@ function New-CategoryCardHtml {
         if (Test-NerdioCoveredCheck $c) {
             $nerdioBadge = '<span class="badge-nerdio nerdio-extra" title="Nerdio advisory coverage applied to the effective score">Nerdio</span>'
             $note = ConvertTo-HtmlSafe (Get-NerdioCoverageNote $c)
-            $effScore = Get-EffectiveCheckScore $c
             $nerdioNoteBlock = @"
       <div class="nerdio-note nerdio-extra">
         <div class="nerdio-label">Nerdio advisory coverage</div>
-        <div>$note Validate the corresponding Nerdio Manager policy/profile before treating this item as remediated. Native score remains $($c.Score)/100; Nerdio effective score is $effScore/100.</div>
+        <div>$note Validate the corresponding Nerdio Manager policy/profile before treating this item as remediated.</div>
       </div>
 "@
         }
