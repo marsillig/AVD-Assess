@@ -2869,49 +2869,6 @@ header.hero {
   margin-bottom: 20px;
 }
 
-.hero-actions {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-}
-.export-pdf {
-  appearance: none;
-  border: 1px solid rgba(78,41,160,0.24);
-  background: rgba(255,255,255,0.78);
-  color: #4e29a0;
-  border-radius: 999px;
-  padding: 7px 12px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  box-shadow: 0 8px 24px rgba(78,41,160,0.10);
-}
-.export-pdf:hover { background: #ffffff; border-color: rgba(78,41,160,0.42); }
-.export-pdf:focus-visible { outline: 3px solid rgba(78,41,160,0.25); outline-offset: 2px; }
-@page { size: A3 landscape; margin: 10mm; }
-@media print {
-  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-  html, body { background: #fff !important; }
-  body { min-height: auto; }
-  .container { max-width: none; width: 100%; padding: 0; }
-  .hero-actions { display: none !important; }
-  header.hero, .meta-bar, .category-card, .removed-section {
-    box-shadow: none !important;
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-  .categories { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-  .categories > .category-card,
-  .categories > .category-card:nth-child(4),
-  .categories > .category-card:nth-child(5) { grid-column: span 1; }
-  .check-row { break-inside: avoid; page-break-inside: avoid; }
-  body.print-export .check-detail { display: block; }
-  body.print-export .check-row { background: rgba(78,41,160,0.035); margin-bottom: 6px; }
-  body.print-export .check-head { padding-bottom: 6px; }
-  footer { break-inside: avoid; page-break-inside: avoid; }
-}
-
 .brand {
   display: flex;
   flex-direction: column;
@@ -3208,9 +3165,6 @@ footer a:hover { color: #4e29a0; }
 <body>
 <div class="container">
   <header class="hero">
-    <div class="hero-actions">
-      <button class="export-pdf" type="button" onclick="exportReportPdf()" aria-label="Export this report to PDF">Export PDF</button>
-    </div>
     <div class="brand">
       <div class="brand-name">AVD<span class="dot">-</span>Scout</div>
       <div class="brand-sub">Azure Virtual Desktop Health Report</div>
@@ -3250,15 +3204,6 @@ $removedHtml
   </footer>
 </div>
 
-<script>
-function exportReportPdf() {
-  document.body.classList.add('print-export');
-  window.setTimeout(function () { window.print(); }, 80);
-}
-window.addEventListener('afterprint', function () {
-  document.body.classList.remove('print-export');
-});
-</script>
 </body>
 </html>
 "@
