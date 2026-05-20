@@ -3305,7 +3305,7 @@ function Save-Reports {
 function Resolve-OutputPath {
     # Normalizes user-supplied output paths before .NET file APIs are used.
     # PowerShell expands ~ for cmdlets, but [System.IO.File] does not; without
-    # this, Cloud Shell paths such as ~/clouddrive/report.html can be treated as
+    # this, Cloud Shell paths such as ~/avd-scout/report.html can be treated as
     # literal child paths under the current directory.
     param(
         [Parameter(Mandatory)][string]$Path,

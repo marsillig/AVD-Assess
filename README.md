@@ -10,7 +10,7 @@ AVD-Scout is Gonzalo Marsilli's renamed fork of the original [WayneBellows/AVD-A
 
 - **2026 AVD readiness checks** for dynamic autoscaling, modern RDP transport, client redirection hardening, platform currency, and AVD Classic retirement awareness.
 - **Virtex report experience** with a light Virtex-inspired palette and footer branding: `AVD-Scout v2.0.0 · https://virtex.cloud · github.com/marsillig/AVD-Scout`.
-- **Azure Cloud Shell compatibility** including reliable `~/clouddrive` output path handling.
+- **Azure Cloud Shell compatibility** including reliable `~/avd-scout` output path handling.
 - **Readable dated filenames** such as `AVD-Scout-Report-2026-05-19_23-26-07.html`.
 - **Fork-aligned docs and URLs** for cloning, Cloud Shell download, and generated report links.
 
@@ -66,14 +66,15 @@ AVD-Scout works in [Azure Cloud Shell](https://shell.azure.com) PowerShell mode.
 # 1. Install modules Cloud Shell might not already have
 Install-Module Az.DesktopVirtualization, Az.Security -Scope CurrentUser -Force
 
-# 2. Download this fork's script into persistent Cloud Drive
-curl -o ~/clouddrive/AVD-Scout.ps1 https://raw.githubusercontent.com/marsillig/AVD-Scout/main/AVD-Scout.ps1
+# 2. Create a project folder and download this fork's script
+mkdir -Force ~/avd-scout
+curl -o ~/avd-scout/AVD-Scout.ps1 https://raw.githubusercontent.com/marsillig/AVD-Scout/main/AVD-Scout.ps1
 
 # 3. Run using the existing Cloud Shell sign-in
-~/clouddrive/AVD-Scout.ps1 -UseExistingConnection -OutputPath ~/clouddrive/avd-scout.html
+~/avd-scout/AVD-Scout.ps1 -UseExistingConnection -OutputPath ~/avd-scout/avd-scout.html
 ```
 
-Then use **Manage files → Download** in Cloud Shell to download `avd-scout.html`.
+Then use **Manage files → Download** in Cloud Shell to download `~/avd-scout/avd-scout.html`.
 
 ## Common usage
 
