@@ -2859,9 +2859,10 @@ body {
 .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px 48px; }
 header.hero {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 24px;
   background: rgba(255,255,255,0.92);
   border: 1px solid rgba(78,41,160,0.16);
@@ -2873,15 +2874,20 @@ header.hero {
 .brand {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  justify-self: center;
+  grid-column: 2;
+  gap: 8px;
+  text-align: center;
 }
 .brand-name {
-  font-size: 36px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: #0a0a0a;
+  font-size: clamp(42px, 5vw, 64px);
+  font-weight: 900;
+  letter-spacing: -0.065em;
+  color: #4e29a0;
+  line-height: 0.95;
 }
-.brand-name .dot { color: #4e29a0; }
+.brand-name .wordmark-space { display: inline-block; width: .18em; }
 .brand-sub {
   font-size: 13px;
   color: #3b3b3b;
@@ -2890,6 +2896,8 @@ header.hero {
 .overall {
   display: flex;
   align-items: center;
+  justify-self: end;
+  grid-column: 3;
   gap: 20px;
 }
 .overall .label {
@@ -3142,8 +3150,8 @@ footer {
 footer a { color: #4e29a0; text-decoration: none; }
 footer a:hover { color: #4e29a0; }
 @media (max-width: 760px) {
-  header.hero { flex-direction: column; align-items: flex-start; }
-  .overall { align-self: flex-end; }
+  header.hero { grid-template-columns: 1fr; justify-items: center; }
+  .brand, .overall { grid-column: 1; justify-self: center; }
   .categories { grid-template-columns: 1fr; }
   .categories > .category-card,
   .categories > .category-card:nth-child(4),
@@ -3167,7 +3175,7 @@ footer a:hover { color: #4e29a0; }
 <div class="container">
   <header class="hero">
     <div class="brand">
-      <div class="brand-name">AVD<span class="dot">-</span>Scout</div>
+      <div class="brand-name">AVD<span class="wordmark-space"></span>SCOUT</div>
       <div class="brand-sub">Azure Virtual Desktop Health Report</div>
     </div>
     <div class="overall">
