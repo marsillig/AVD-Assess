@@ -1,7 +1,7 @@
 # Generated reports
-AVD-Assess-Report-*.html
-AVD-Assess-Report-*.json
-AVD-Assess-Sweep-*/
+AVD-Scout-Report-*.html
+AVD-Scout-Report-*.json
+AVD-Scout-Sweep-*/
 _dryrun*.html
 _dryrun*.json
 *.html
@@ -43,4 +43,4 @@ settings.local.*
 *.local.json
 
 # Spec
-AVD-Assess-Build-Spec.md
+AVD-Scout-Build-Spec.md

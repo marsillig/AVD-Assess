@@ -1,17 +1,17 @@
-# AVD-Assess
+# AVD-Scout
 
 **A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 29 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance. Optionally emits machine-readable JSON, compares a run to a previous one to show whether scores are improving, and sweeps every accessible subscription in a single pass.
 
 
 ## Fork notice
 
-This repository is Gonzalo Marsilli's fork of the original [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess) project by Wayne Bellows. The fork preserves the original MIT-licensed AVD health-checker foundation and adds fork-specific updates, including 2026 AVD readiness checks, Azure Cloud Shell path handling, Virtex-inspired report styling, and fork branding.
+AVD-Scout is Gonzalo Marsilli's renamed fork of the original [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess) project by Wayne Bellows. This fork preserves the original MIT-licensed AVD health-checker foundation and adds fork-specific updates, including 2026 AVD readiness checks, Azure Cloud Shell path handling, Virtex-inspired report styling, and fork branding.
 
 ## Why this exists
 
-There is no free, open-source, automated health checker for AVD. Microsoft's Well-Architected Framework for AVD is thorough documentation, but operationalising it means either paying for a commercial tool, running a manual review, or doing nothing. AVD-Assess turns the guidance into a five-minute script that produces a shareable report — covering all five WAF pillars and every finding linked to a specific Microsoft Learn article.
+There is no free, open-source, automated health checker for AVD. Microsoft's Well-Architected Framework for AVD is thorough documentation, but operationalising it means either paying for a commercial tool, running a manual review, or doing nothing. AVD-Scout turns the guidance into a five-minute script that produces a shareable report — covering all five WAF pillars and every finding linked to a specific Microsoft Learn article.
 
-![AVD-Assess Report](docs/screenshot.png)
+![AVD-Scout Report](docs/screenshot.png)
 
 ## What it checks
 
@@ -44,31 +44,31 @@ Every finding names the affected resources, explains the fix in concrete terms, 
 Install-Module Az.Accounts, Az.DesktopVirtualization, Az.Compute, Az.Monitor, Az.Resources, Az.Network, Az.Storage, Az.Security -Scope CurrentUser
 
 # Clone the repo
-git clone https://github.com/marsillig/AVD-Assess.git
-cd AVD-Assess
+git clone https://github.com/marsillig/AVD-Scout.git
+cd AVD-Scout
 
 # Run against your current Azure context
-./AVD-Assess.ps1 -OpenReport
+./AVD-Scout.ps1 -OpenReport
 ```
 
-The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 29 checks, and writes `AVD-Assess-Report-<timestamp>.html` to the current directory.
+The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 29 checks, and writes `AVD-Scout-Report-<timestamp>.html` to the current directory.
 
 ## Running from Azure Cloud Shell
 
-AVD-Assess works in [Azure Cloud Shell](https://shell.azure.com) (PowerShell mode) — no local install, and you're already signed in to your tenant.
+AVD-Scout works in [Azure Cloud Shell](https://shell.azure.com) (PowerShell mode) — no local install, and you're already signed in to your tenant.
 
 ```powershell
 # 1. Install the modules Cloud Shell doesn't ship by default
 Install-Module Az.DesktopVirtualization, Az.Security -Scope CurrentUser -Force
 
 # 2. Download the script into your persistent Cloud Drive
-curl -o ~/clouddrive/AVD-Assess.ps1 https://raw.githubusercontent.com/marsillig/AVD-Assess/main/AVD-Assess.ps1
+curl -o ~/clouddrive/AVD-Scout.ps1 https://raw.githubusercontent.com/marsillig/AVD-Scout/main/AVD-Scout.ps1
 
 # 3. Run it against your current Cloud Shell context
-~/clouddrive/AVD-Assess.ps1 -UseExistingConnection -OutputPath ~/clouddrive/avd-assess.html
+~/clouddrive/AVD-Scout.ps1 -UseExistingConnection -OutputPath ~/clouddrive/avd-scout.html
 ```
 
-Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `avd-assess.html` and open it locally.
+Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `avd-scout.html` and open it locally.
 
 **Notes:**
 - Use `-UseExistingConnection` — Cloud Shell is already authenticated.
@@ -83,7 +83,7 @@ Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `av
 | `-TenantId` | Azure tenant ID. Falls back to the current Az context. | `11111111-1111-1111-1111-111111111111` |
 | `-OutputPath` | Path for the report. Defaults to the current directory with a timestamp. In sweep mode this is the output **directory**. | `C:\Reports\avd.html` |
 | `-OutputFormat` | `HTML` (default), `JSON`, or `Both`. JSON is a structured, machine-readable document for trend tracking, CI/CD gates, or dashboards. | `Both` |
-| `-CompareTo` | Path to a JSON report from a previous run. Annotates every score (overall, per-category, per-check) with its movement since that run, flags new checks, and lists checks no longer assessed. | `.\AVD-Assess-Report-20260401-090000.json` |
+| `-CompareTo` | Path to a JSON report from a previous run. Annotates every score (overall, per-category, per-check) with its movement since that run, flags new checks, and lists checks no longer assessed. | `.\AVD-Scout-Report-20260401-090000.json` |
 | `-AllAccessibleSubscriptions` | Sweep every enabled subscription the signed-in identity can see. Writes one report pair per subscription plus an `index.html` roll-up. | *switch* |
 | `-HostPoolName` | Scope the assessment to a single host pool (requires `-ResourceGroupName`). | `hp-prod-pooled-01` |
 | `-ResourceGroupName` | Scope the assessment to a specific resource group. | `rg-avd-prod` |
@@ -99,7 +99,7 @@ Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `av
 The FSLogix Region Colocation and Profile Redundancy checks need to know which storage account hosts your profile containers. Discovery is three-stage, in this order:
 
 1. **`-FSLogixStorageAccount`** — explicit parameter, applies to every host pool. Best for one-off runs.
-2. **Host pool tag** (default name `FSLogixStorageAccount`) — durable; recommended for ongoing use. AVD-Assess proposes this as a community convention; no Microsoft-blessed standard exists.
+2. **Host pool tag** (default name `FSLogixStorageAccount`) — durable; recommended for ongoing use. AVD-Scout proposes this as a community convention; no Microsoft-blessed standard exists.
 3. **Name-pattern scan** in the host pool's resource group (default `*fslogix*`).
 
 If none match, both FSLogix checks return `Info`. The finding text records which method matched so you can tell whether the result was auto-detected or supplied.
@@ -110,10 +110,10 @@ If none match, both FSLogix checks return `Info`. The finding text records which
 
 ```powershell
 # HTML + JSON in one run
-./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd.html
+./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd-scout.html
 
 # Later, show how every score has moved since that run
-./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd.json
+./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd-scout.json
 ```
 
 With `-CompareTo`, the HTML report and console show a movement badge next to every score — overall, per-category, and per-check (`▲ +5` improved, `▼ −3` regressed, `=` unchanged). Checks that didn't exist in the baseline are flagged **new**; checks present in the baseline but no longer produced are listed in a **No longer assessed** section so a dropped check is never silently lost. The JSON gains `comparedTo`, `scores.delta`, per-check `delta`/`isNew`, and a `removedChecks` array.
@@ -125,40 +125,40 @@ The JSON envelope carries a `schemaVersion` (semver: minor = additive, major = b
 Most enterprise AVD estates span several subscriptions (prod / dev / DR). `-AllAccessibleSubscriptions` assesses every enabled subscription the signed-in identity can see in one pass:
 
 ```powershell
-./AVD-Assess.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
+./AVD-Scout.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
 ```
 
 - Each subscription gets a pre-flight access probe; one it can't read is **skipped** (and listed with the reason) rather than aborting the whole sweep.
 - One HTML/JSON report pair is written per assessed subscription, plus an `index.html` roll-up grouping subscriptions into **Assessed** (score, linked to the detailed report, sorted lowest-first), **Empty** (accessible but no AVD), and **Skipped**.
-- `-OutputPath` is treated as the output **directory** (default `.\AVD-Assess-Sweep-<timestamp>`); `-OpenReport` opens the index.
+- `-OutputPath` is treated as the output **directory** (default `.\AVD-Scout-Sweep-<timestamp>`); `-OpenReport` opens the index.
 - Cannot be combined with `-SubscriptionId`, `-HostPoolName`, `-ResourceGroupName`, `-CompareTo`, or `-DryRun` (rejected up front with a clear message).
 
 ## Examples
 
 ```powershell
 # Full subscription, open the report when done
-./AVD-Assess.ps1 -SubscriptionId "00000000-0000-0000-0000-000000000000" -OpenReport
+./AVD-Scout.ps1 -SubscriptionId "00000000-0000-0000-0000-000000000000" -OpenReport
 
 # Single host pool
-./AVD-Assess.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
+./AVD-Scout.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
 
 # Automation-friendly (already authenticated)
-./AVD-Assess.ps1 -UseExistingConnection -OutputPath "C:\Reports\avd-health.html"
+./AVD-Scout.ps1 -UseExistingConnection -OutputPath "C:\Reports\avd-scout-health.html"
 
 # Verify the report layout without hitting Azure (synthetic data)
-./AVD-Assess.ps1 -DryRun -OpenReport
+./AVD-Scout.ps1 -DryRun -OpenReport
 
 # FSLogix storage isn't tagged or name-matched - override for this run
-./AVD-Assess.ps1 -UseExistingConnection -OpenReport -FSLogixStorageAccount stfslogixprod
+./AVD-Scout.ps1 -UseExistingConnection -OpenReport -FSLogixStorageAccount stfslogixprod
 
 # HTML + machine-readable JSON
-./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd.html
+./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -OutputPath .\avd-scout.html
 
 # Trend: compare this run to a previous JSON report
-./AVD-Assess.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd.json
+./AVD-Scout.ps1 -UseExistingConnection -OutputFormat Both -CompareTo .\avd-scout.json
 
 # Sweep every accessible subscription into a dated folder
-./AVD-Assess.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both -OpenReport
+./AVD-Scout.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both -OpenReport
 ```
 
 ## How the scoring works
@@ -179,7 +179,7 @@ Two presentation rules keep partially evaluated results honest:
 
 ## Contributing
 
-Bug reports, new checks, and report design improvements for this fork are welcome via [marsillig/AVD-Assess](https://github.com/marsillig/AVD-Assess). See [CONTRIBUTING.md](CONTRIBUTING.md) for the data model and style guidance. For the upstream project, refer to [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
+Bug reports, new checks, and report design improvements for this fork are welcome via [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). See [CONTRIBUTING.md](CONTRIBUTING.md) for the data model and style guidance. For the upstream project, refer to [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
 
 ## License
 
@@ -187,4 +187,4 @@ Bug reports, new checks, and report design improvements for this fork are welcom
 
 ---
 
-Fork maintained at [marsillig/AVD-Assess](https://github.com/marsillig/AVD-Assess). Original project by [Wayne Bellows](https://modern-euc.com): [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
+Fork maintained at [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout). Original project by [Wayne Bellows](https://modern-euc.com): [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).

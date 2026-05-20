@@ -1,10 +1,10 @@
-# Contributing to AVD-Assess
+# Contributing to AVD-Scout
 
-Thanks for your interest in improving AVD-Assess. This is a single-file PowerShell tool by design — contributions should preserve that simplicity.
+Thanks for your interest in improving AVD-Scout. This is a single-file PowerShell tool by design — contributions should preserve that simplicity.
 
 ## Adding a new check
 
-Every check lives inside `AVD-Assess.ps1` and registers its outcome by calling `Add-CheckResult`. Display name, remediation, and Learn URL are **not** inlined at the call site — they live once in the `$script:CheckCatalog` hashtable, keyed by a stable check ID, and are read by both the real check and the dry-run seeder. Adding a check is a three-step sequence:
+Every check lives inside `AVD-Scout.ps1` and registers its outcome by calling `Add-CheckResult`. Display name, remediation, and Learn URL are **not** inlined at the call site — they live once in the `$script:CheckCatalog` hashtable, keyed by a stable check ID, and are read by both the real check and the dry-run seeder. Adding a check is a three-step sequence:
 
 1. **Register it in `$script:CheckCatalog`** under a new ID (e.g. `ScalingPlanCoverage`) with `Name`, `Remediation`, and `LearnMore`.
 2. **Write the check function**, calling `Add-CheckResult` and pulling the catalogued strings:
@@ -37,12 +37,12 @@ Rules of thumb for new checks:
 1. **Parse-check the script locally:**
    ```powershell
    [System.Management.Automation.Language.Parser]::ParseFile(
-       "$PWD\AVD-Assess.ps1", [ref]$null, [ref]$null
+       "$PWD\AVD-Scout.ps1", [ref]$null, [ref]$null
    ) | Out-Null
    ```
 2. **Render the HTML offline** using the hidden dry-run switch:
    ```powershell
-   ./AVD-Assess.ps1 -DryRun -OutputPath ./_dryrun.html -OpenReport
+   ./AVD-Scout.ps1 -DryRun -OutputPath ./_dryrun.html -OpenReport
    ```
    This seeds synthetic results for all 25 checks and produces a full report without hitting Azure. Useful for verifying UI changes and new categories/statuses. Add `-OutputFormat Both` to also exercise the JSON writer, and `-CompareTo <previous.json>` to verify delta rendering.
 3. **Run against a real subscription** with a varied configuration (mix of pooled / personal, scaling plans present / absent, healthy / unhealthy hosts). Ideally a dev subscription — this tool is read-only but you should still scope carefully.

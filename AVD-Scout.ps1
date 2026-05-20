@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    AVD-Assess - Azure Virtual Desktop health checker.
+    AVD-Scout - Azure Virtual Desktop health checker.
 
 .DESCRIPTION
     Connects to an Azure subscription, runs 16 best-practice checks against Azure
@@ -17,7 +17,7 @@
 
 .PARAMETER OutputPath
     Where to save the HTML report. Defaults to the current directory with a
-    timestamped filename: AVD-Assess-Report-yyyyMMdd-HHmmss.html
+    timestamped filename: AVD-Scout-Report-yyyyMMdd-HHmmss.html
 
 .PARAMETER HostPoolName
     Optional: scope the assessment to a single host pool by name.
@@ -44,7 +44,7 @@
 
 .PARAMETER FSLogixTagName
     Host pool tag key that names the FSLogix storage account. Defaults to
-    'FSLogixStorageAccount'. AVD-Assess proposes this as a community
+    'FSLogixStorageAccount'. AVD-Scout proposes this as a community
     convention - no Microsoft-blessed standard exists.
 
 .PARAMETER FSLogixNamePattern
@@ -82,37 +82,37 @@
     index.html roll-up grouping subscriptions into Assessed (with score and
     a link to the detailed report), Empty (no AVD resources), and Skipped
     (probe failed). In sweep mode -OutputPath is treated as the output
-    *directory* (default: .\AVD-Assess-Sweep-<timestamp>). Cannot be combined
+    *directory* (default: .\AVD-Scout-Sweep-<timestamp>). Cannot be combined
     with -SubscriptionId, -HostPoolName, -ResourceGroupName, -CompareTo, or
     -DryRun.
 
 .EXAMPLE
-    .\AVD-Assess.ps1
+    .\AVD-Scout.ps1
     Run against all host pools in the current Az context.
 
 .EXAMPLE
-    .\AVD-Assess.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
+    .\AVD-Scout.ps1 -AllAccessibleSubscriptions -UseExistingConnection -OutputFormat Both
     Assess every accessible subscription, writing an HTML+JSON pair per
-    subscription and an index.html roll-up under .\AVD-Assess-Sweep-<stamp>.
+    subscription and an index.html roll-up under .\AVD-Scout-Sweep-<stamp>.
 
 .EXAMPLE
-    .\AVD-Assess.ps1 -OutputFormat Both -CompareTo .\AVD-Assess-Report-20260401-090000.json
+    .\AVD-Scout.ps1 -OutputFormat Both -CompareTo .\AVD-Scout-Report-20260401-090000.json
     Assess the environment and show how every score has moved since the
     1 April baseline, in both the HTML and JSON reports.
 
 .EXAMPLE
-    .\AVD-Assess.ps1 -SubscriptionId "00000000-0000-0000-0000-000000000000" -OpenReport
+    .\AVD-Scout.ps1 -SubscriptionId "00000000-0000-0000-0000-000000000000" -OpenReport
 
 .EXAMPLE
-    .\AVD-Assess.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
+    .\AVD-Scout.ps1 -HostPoolName "hp-prod-pooled-01" -ResourceGroupName "rg-avd-prod"
 
 .EXAMPLE
-    .\AVD-Assess.ps1 -UseExistingConnection -OutputPath "C:\Reports\avd-health.html"
+    .\AVD-Scout.ps1 -UseExistingConnection -OutputPath "C:\Reports\avd-health.html"
 
 .NOTES
     Author   : Wayne Bellows (wayne_bellows@hotmail.com)
     Website  : https://modern-euc.com
-    Project  : https://github.com/waynebellows/AVD-Assess
+    Project  : https://github.com/marsillig/AVD-Scout
     License  : MIT
     Version  : 2.0.0
 #>
@@ -149,7 +149,7 @@ $script:JsonSchemaVersion = '1.1'   # Bump major on breaking changes, minor on a
                                     # ignore unknown fields). -CompareTo refuses to diff
                                     # incompatible *major* versions, so a 1.0 baseline still
                                     # diffs cleanly against this 1.1 build.
-$script:ProjectUrl  = 'https://github.com/marsillig/AVD-Assess'
+$script:ProjectUrl  = 'https://github.com/marsillig/AVD-Scout'
 $script:WebsiteUrl  = 'https://modern-euc.com'
 $script:RequiredModules = @(
     'Az.Accounts',
@@ -446,12 +446,12 @@ function Write-Section {
 
 function Write-Banner {
     $v = $script:ToolVersion
-    $verLine = "  |           AVD-Assess  v{0,-22}|" -f $v
+    $verLine = "  |           AVD-Scout  v{0,-23}|" -f $v
     Write-Host ''
     Write-Host '  +----------------------------------------------+' -ForegroundColor Cyan
     Write-Host $verLine                                              -ForegroundColor Cyan
     Write-Host '  |  Azure Virtual Desktop Health Checker        |' -ForegroundColor Cyan
-    Write-Host '  |  github.com/marsillig/AVD-Assess             |' -ForegroundColor Cyan
+    Write-Host '  |  github.com/marsillig/AVD-Scout              |' -ForegroundColor Cyan
     Write-Host '  +----------------------------------------------+' -ForegroundColor Cyan
     Write-Host ''
 }
@@ -1809,7 +1809,7 @@ function Invoke-SecurityChecks {
     if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
         Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
             -Finding 'Unable to retrieve VM data - Reader permissions may be missing on the compute resources. Skipping Trusted Launch check.' `
-            -Remediation 'Grant the Reader role on the VM resource groups (or subscription) so AVD-Assess can read VM properties, then re-run.' `
+            -Remediation 'Grant the Reader role on the VM resource groups (or subscription) so AVD-Scout can read VM properties, then re-run.' `
             -LearnMore $m.LearnMore
     } else {
         $trusted = @($script:allVMs | Where-Object { $_.SecurityProfile -and $_.SecurityProfile.SecurityType -eq 'TrustedLaunch' })
@@ -1832,7 +1832,7 @@ function Invoke-SecurityChecks {
     if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
         Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
             -Finding 'Unable to retrieve VM data - join status could not be evaluated.' `
-            -Remediation 'Grant Reader access to the VM resource groups so AVD-Assess can inspect VM extensions.' `
+            -Remediation 'Grant Reader access to the VM resource groups so AVD-Scout can inspect VM extensions.' `
             -LearnMore $m.LearnMore
     } else {
         $entra = @($script:allVMs | Where-Object {
@@ -1914,7 +1914,7 @@ function Invoke-SecurityChecks {
         if (-not $hasPnaProperty) {
             Add-CheckResult -Category Security -CheckName $m.Name -Status Info -Score 100 `
                 -Finding 'The installed Az.DesktopVirtualization module does not expose the PublicNetworkAccess property on host pools. Update to Az.DesktopVirtualization 4.0 or later to enable this check.' `
-                -Remediation 'Run: Update-Module Az.DesktopVirtualization -Force, then re-run AVD-Assess.' `
+                -Remediation 'Run: Update-Module Az.DesktopVirtualization -Force, then re-run AVD-Scout.' `
                 -LearnMore $m.LearnMore
         } else {
             $exposed = [System.Collections.Generic.List[string]]::new()
@@ -2344,7 +2344,7 @@ function Invoke-PerformanceChecks {
     if ($script:VmFetchFailed -or $script:allVMs.Count -eq 0) {
         Add-CheckResult -Category Performance -CheckName $m.Name -Status Info -Score 100 `
             -Finding 'Unable to retrieve VM image references - platform currency could not be evaluated.' `
-            -Remediation 'Grant Reader access to the VM resource groups so AVD-Assess can inspect VM storage profile image references.' `
+            -Remediation 'Grant Reader access to the VM resource groups so AVD-Scout can inspect VM storage profile image references.' `
             -LearnMore $m.LearnMore
     } else {
         $current = [System.Collections.Generic.List[string]]::new()
@@ -2507,7 +2507,7 @@ function Import-CompareBaseline {
     }
 
     if (-not $base.schemaVersion) {
-        throw "CompareTo baseline '$Path' has no schemaVersion field - it does not look like an AVD-Assess JSON report."
+        throw "CompareTo baseline '$Path' has no schemaVersion field - it does not look like an AVD-Scout JSON report."
     }
 
     $baseMajor = ([string]$base.schemaVersion -split '\.')[0] -as [int]
@@ -2516,7 +2516,7 @@ function Import-CompareBaseline {
         throw "CompareTo baseline '$Path' has an unparseable schemaVersion '$($base.schemaVersion)'."
     }
     if ($baseMajor -ne $curMajor) {
-        throw ("CompareTo baseline schemaVersion {0} is incompatible with this build's schema {1} (major versions differ - the diff would be meaningless). Re-run the baseline with a matching AVD-Assess version, or omit -CompareTo." -f $base.schemaVersion, $script:JsonSchemaVersion)
+        throw ("CompareTo baseline schemaVersion {0} is incompatible with this build's schema {1} (major versions differ - the diff would be meaningless). Re-run the baseline with a matching AVD-Scout version, or omit -CompareTo." -f $base.schemaVersion, $script:JsonSchemaVersion)
     }
 
     $byId = @{}
@@ -2761,7 +2761,7 @@ function New-JsonReport {
     }
 
     $envelope = [ordered]@{
-        tool          = 'AVD-Assess'
+        tool          = 'AVD-Scout'
         version       = $script:ToolVersion
         schemaVersion = $script:JsonSchemaVersion
         generatedAt   = $now
@@ -3178,7 +3178,7 @@ footer a:hover { color: #4e29a0; }
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AVD-Assess Report &mdash; $subName</title>
+<title>AVD-Scout Report &mdash; $subName</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -3191,7 +3191,7 @@ footer a:hover { color: #4e29a0; }
       <button class="export-pdf" type="button" onclick="window.print()" aria-label="Export this report to PDF">Export PDF</button>
     </div>
     <div class="brand">
-      <div class="brand-name">AVD<span class="dot">-</span>Assess</div>
+      <div class="brand-name">AVD<span class="dot">-</span>Scout</div>
       <div class="brand-sub">Azure Virtual Desktop Health Report</div>
     </div>
     <div class="overall">
@@ -3223,9 +3223,9 @@ footer a:hover { color: #4e29a0; }
 $removedHtml
 
   <footer>
-    AVD-Assess v$script:ToolVersion &middot;
+    AVD-Scout v$script:ToolVersion &middot;
     <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
-    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Assess</a>
+    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Scout</a>
   </footer>
 </div>
 </body>
@@ -3455,7 +3455,7 @@ footer a { color:#4e29a0; text-decoration:none; }
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AVD-Assess Sweep &mdash; $($Results.Count) subscription(s)</title>
+<title>AVD-Scout Sweep &mdash; $($Results.Count) subscription(s)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>$css</style>
@@ -3464,7 +3464,7 @@ footer a { color:#4e29a0; text-decoration:none; }
 <div class="container">
   <header class="hero">
     <div>
-      <div class="brand-name">AVD<span class="dot">-</span>Assess</div>
+      <div class="brand-name">AVD<span class="dot">-</span>Scout</div>
       <div class="brand-sub">Multi-subscription sweep</div>
     </div>
     <div class="hero-meta">
@@ -3484,9 +3484,9 @@ $sectionEmpty
 $sectionSkipped
 
   <footer>
-    AVD-Assess v$script:ToolVersion &middot;
+    AVD-Scout v$script:ToolVersion &middot;
     <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
-    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Assess</a>
+    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Scout</a>
   </footer>
 </div>
 </body>
@@ -3518,7 +3518,7 @@ function Invoke-SubscriptionSweep {
     if ($OutputPath) {
         $sweepDir = Resolve-OutputPath -Path $OutputPath -PathType Directory
     } else {
-        $sweepDir = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Sweep-$stamp"
+        $sweepDir = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Scout-Sweep-$stamp"
     }
     if (-not (Test-Path $sweepDir)) { New-Item -ItemType Directory -Path $sweepDir -Force | Out-Null }
 
@@ -3580,7 +3580,7 @@ function Invoke-SubscriptionSweep {
         Write-ScoreSummaryConsole
 
         $slug    = Get-SubSlug -Name $sub.Name -Id $sub.Id
-        $base    = Join-Path $sweepDir ("AVD-Assess-Report-{0}-{1}.html" -f $slug, $stamp)
+        $base    = Join-Path $sweepDir ("AVD-Scout-Report-{0}-{1}.html" -f $slug, $stamp)
         $written = Save-Reports -BasePath $base
 
         $rec.Status     = 'Assessed'
@@ -3666,7 +3666,7 @@ function Invoke-Main {
 
     if (-not $OutputPath) {
         $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-        $OutputPath = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Assess-Report-$stamp.html"
+        $OutputPath = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Scout-Report-$stamp.html"
     }
 
     Write-Host ''

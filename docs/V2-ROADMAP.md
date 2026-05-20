@@ -1,4 +1,4 @@
-# AVD-Assess v2.0 — Roadmap & Design Draft
+# AVD-Scout v2.0 — Roadmap & Design Draft
 
 **Status:** Draft  
 **Author:** Wayne Bellows  
@@ -10,7 +10,7 @@
 
 v1 covers **four** of the five Microsoft Well-Architected Framework pillars for Azure Virtual Desktop. The fifth — **Performance Efficiency** — is missing entirely. v2 closes that gap and extends the four existing categories with the highest-leverage checks identified in the [WAF for AVD documentation](https://learn.microsoft.com/en-us/azure/well-architected/azure-virtual-desktop/).
 
-v2 also turns AVD-Assess from a **snapshot** into a **trend** by adding JSON output and compare-to-previous mode, and supports multi-subscription estates — the common shape of real enterprise AVD deployments.
+v2 also turns AVD-Scout from a **snapshot** into a **trend** by adding JSON output and compare-to-previous mode, and supports multi-subscription estates — the common shape of real enterprise AVD deployments.
 
 ---
 
@@ -74,7 +74,7 @@ The 5th WAF pillar. New donut on the report; check rows live alongside Cost / Re
 **Detection.** Hard problem — there's no ARM API to ask *"which storage account does this host pool's FSLogix use?"* (FSLogix is configured per-VM via a registry value pointing at a UNC path; not surfaced through ARM). Three-stage discovery, each step configurable, with the discovery method recorded in the finding text so admins know whether to trust the result:
 
 1. **Explicit override** — if `-FSLogixStorageAccount <name>` is passed at runtime, use that for every host pool. Foolproof; for one-off runs.
-2. **Tag convention** — read the host pool tag named `FSLogixStorageAccount` (configurable via `-FSLogixTagName`). AVD-Assess effectively proposes this as a community convention; no Microsoft-blessed standard exists.
+2. **Tag convention** — read the host pool tag named `FSLogixStorageAccount` (configurable via `-FSLogixTagName`). AVD-Scout effectively proposes this as a community convention; no Microsoft-blessed standard exists.
 3. **Name-pattern scan** — match storage accounts in the host pool's resource group against `*fslogix*` case-insensitive (configurable via `-FSLogixNamePattern`).
 
 If all three fail, the check returns `Info` with a remediation that suggests adding the tag or passing the parameter.
@@ -170,7 +170,7 @@ When `JSON` or `Both`, write `<basename>.json` alongside the HTML report. Schema
 
 ```json
 {
-  "tool": "AVD-Assess",
+  "tool": "AVD-Scout",
   "version": "2.0.0",
   "schemaVersion": "1.0",
   "generatedAt": "2026-04-27T14:23:00Z",
@@ -241,7 +241,7 @@ When set:
 
 - Iterate `Get-AzSubscription` for all subscriptions accessible to the current context
 - **Pre-flight permission probe** — for each candidate subscription, attempt a cheap probe (e.g. `Get-AzResourceGroup -DefaultProfile <ctx>` with `-First 1`) before the real assessment runs. Subscriptions that throw on probe are logged to the console as `skipped: insufficient permissions` and excluded from the assessment loop.
-- Produce one HTML/JSON pair per assessed subscription, named `AVD-Assess-Report-<subscription-shortname>-<timestamp>.html`
+- Produce one HTML/JSON pair per assessed subscription, named `AVD-Scout-Report-<subscription-shortname>-<timestamp>.html`
 - Produce a roll-up `index.html` listing every subscription with three sections:
   - **Assessed** — overall score and direct link into the detailed report
   - **Empty** — subscriptions with no AVD resources (skipped silently mid-run, surfaced here so the user knows they were checked)
