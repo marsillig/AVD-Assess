@@ -2689,13 +2689,6 @@ function New-CategoryCardHtml {
         ('<div class="cat-scored-tally">{0} of {1} scored</div>' -f $tally.Scored, $tally.Total)
     } else { '' }
     $catDeltaHtml = New-DeltaBadgeHtml (Get-ScoreDelta -Current $score -Previous (Get-BaselineCategoryScore $Category))
-    $effectiveHtml = ''
-    if ($ManagedByNerdio) {
-        $effective = Get-EffectiveCategoryScore -Category $Category
-        if ($null -ne $effective -and $null -ne $score -and $effective -ne $score) {
-            $effectiveHtml = ('<div class="cat-effective nerdio-extra">Nerdio effective: {0}/100</div>' -f $effective)
-        }
-    }
     $checks = @($script:Checks | Where-Object { $_.Category -eq $Category })
 
     $rows = [System.Text.StringBuilder]::new()
@@ -2771,7 +2764,6 @@ $remBlock
       <div class="sub">$DisplayName</div>
       <div class="cat-score">$scoreHtml $catDeltaHtml</div>
       $tallyHtml
-      $effectiveHtml
     </div>
   </div>
   <div class="check-list">
@@ -3049,7 +3041,6 @@ body.nerdio-visible .nerdio-extra { display: inline-flex !important; }
 body.nerdio-visible .overall-native { display: none !important; }
 body.nerdio-visible .overall-effective { display: inline-flex !important; }
 body.nerdio-visible .effective-score { display: grid !important; }
-body.nerdio-visible .cat-effective,
 body.nerdio-visible .nerdio-note { display: block !important; }
 
 .brand {
@@ -3265,12 +3256,6 @@ body.nerdio-visible .nerdio-note { display: block !important; }
 .effective-score span,
 .effective-score strong { line-height: 1.2; }
 .effective-score strong { color: #4e29a0; font-weight: 800; text-align: right; }
-.cat-effective {
-  font-size: 11px;
-  color: #4e29a0;
-  font-weight: 700;
-  margin-top: 5px;
-}
 .nerdio-note {
   background: rgba(78,41,160,0.06);
   border-left: 3px solid #4e29a0;
