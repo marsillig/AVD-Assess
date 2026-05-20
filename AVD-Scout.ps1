@@ -2907,13 +2907,14 @@ function New-JsonReport {
 function New-HtmlReport {
     $overall = Get-OverallScore
     $effectiveOverall = Get-EffectiveOverallScore
-    $displayOverall = if ($ManagedByNerdio -and $null -ne $effectiveOverall) { $effectiveOverall } else { $overall }
-    $overallDonut = New-DonutSvg -Score $displayOverall -Size 140
-    $overallHtml = if ($null -eq $displayOverall) {
+    $nativeDonut = New-DonutSvg -Score $overall -Size 140
+    $nativeOverallHtml = if ($null -eq $overall) {
         '<span class="overall-na">N/A</span>'
     } else {
-        "$displayOverall<span class=""suffix"">/100</span>"
+        "$overall<span class=""suffix"">/100</span>"
     }
+    $overallDonut = $nativeDonut
+    $overallHtml = $nativeOverallHtml
     $overallDeltaHtml = if ($ManagedByNerdio) { '' } else { New-DeltaBadgeHtml (Get-ScoreDelta -Current $overall -Previous (Get-BaselineOverall)) }
     $effectiveOverallHtml = ''
     $nerdioToggleHtml = ''
@@ -2921,6 +2922,12 @@ function New-HtmlReport {
     if ($ManagedByNerdio) {
         $effText = if ($null -eq $effectiveOverall) { 'N/A' } else { ('{0}/100' -f $effectiveOverall) }
         $nativeText = if ($null -eq $overall) { 'N/A' } else { ('{0}/100' -f $overall) }
+        if ($null -ne $effectiveOverall) {
+            $effectiveDonut = New-DonutSvg -Score $effectiveOverall -Size 140
+            $effectiveOverallText = "$effectiveOverall<span class=""suffix"">/100</span>"
+            $overallDonut = '<span class="overall-native">{0}</span><span class="overall-effective nerdio-extra">{1}</span>' -f $nativeDonut, $effectiveDonut
+            $overallHtml = '<span class="overall-native">{0}</span><span class="overall-effective nerdio-extra">{1}</span>' -f $nativeOverallHtml, $effectiveOverallText
+        }
         $effectiveOverallHtml = '<div class="effective-score nerdio-extra"><span>Native Score</span><strong>{0}</strong><span>Nerdio Effective</span><strong>{1}</strong></div>' -f $nativeText, $effText
         $nerdioToggleHtml = '<button type="button" class="nerdio-toggle" onclick="toggleNerdioOverlay()" aria-pressed="false">Nerdio Managed</button>'
         $nerdioScriptHtml = @'
@@ -3040,6 +3047,8 @@ header.hero {
 }
 .nerdio-extra { display: none !important; }
 body.nerdio-visible .nerdio-extra { display: inline-flex !important; }
+body.nerdio-visible .overall-native { display: none !important; }
+body.nerdio-visible .overall-effective { display: inline-flex !important; }
 body.nerdio-visible .effective-score { display: grid !important; }
 body.nerdio-visible .cat-effective,
 body.nerdio-visible .nerdio-note { display: block !important; }
