@@ -149,7 +149,7 @@ $script:JsonSchemaVersion = '1.1'   # Bump major on breaking changes, minor on a
                                     # ignore unknown fields). -CompareTo refuses to diff
                                     # incompatible *major* versions, so a 1.0 baseline still
                                     # diffs cleanly against this 1.1 build.
-$script:ProjectUrl  = 'https://github.com/waynebellows/AVD-Assess'
+$script:ProjectUrl  = 'https://github.com/marsillig/AVD-Assess'
 $script:WebsiteUrl  = 'https://modern-euc.com'
 $script:RequiredModules = @(
     'Az.Accounts',
@@ -452,7 +452,7 @@ function Write-Banner {
     Write-Host $verLine                                              -ForegroundColor Cyan
     Write-Host '  |  Azure Virtual Desktop Health Checker        |' -ForegroundColor Cyan
     Write-Host '  |  modern-euc.com                              |' -ForegroundColor Cyan
-    Write-Host '  |  github.com/waynebellows/AVD-Assess          |' -ForegroundColor Cyan
+    Write-Host '  |  github.com/marsillig/AVD-Assess             |' -ForegroundColor Cyan
     Write-Host '  +----------------------------------------------+' -ForegroundColor Cyan
     Write-Host ''
 }
@@ -3199,7 +3199,7 @@ $removedHtml
   <footer>
     AVD-Assess v$script:ToolVersion &middot;
     <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
-    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/waynebellows/AVD-Assess</a>
+    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Assess</a>
   </footer>
 </div>
 </body>
@@ -3460,7 +3460,7 @@ $sectionSkipped
   <footer>
     AVD-Assess v$script:ToolVersion &middot;
     <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
-    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/waynebellows/AVD-Assess</a>
+    <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Assess</a>
   </footer>
 </div>
 </body>
