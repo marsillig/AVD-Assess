@@ -12,7 +12,7 @@ AVD-Scout is Gonzalo Marsilli's renamed fork of the original [WayneBellows/AVD-A
 - **Virtex report experience** with a light Virtex-inspired palette and footer branding: `AVD-Scout v2.0.0 · https://virtex.cloud · github.com/marsillig/AVD-Scout`.
 - **Azure Cloud Shell compatibility** including reliable relative and `~` output path handling.
 - **Readable dated filenames** such as `AVD-Scout-Report-2026-05-19_23-26-07.html`.
-- **Fork-aligned docs and URLs** for cloning, Cloud Shell download, and generated report links.
+- **Fork-aligned docs and URLs** for direct Cloud Shell script download and generated report links.
 
 ## What it checks
 
