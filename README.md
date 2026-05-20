@@ -2,6 +2,11 @@
 
 **A free, open-source PowerShell health checker for Azure Virtual Desktop.** Connects to your subscription, runs 29 best-practice checks across all five [Well-Architected Framework pillars for AVD](https://learn.microsoft.com/azure/well-architected/azure-virtual-desktop/) — Cost, Reliability, Security, Operations, and Performance Efficiency — and produces a self-contained HTML report with traffic-light scoring and remediation guidance. Optionally emits machine-readable JSON, compares a run to a previous one to show whether scores are improving, and sweeps every accessible subscription in a single pass.
 
+
+## Fork notice
+
+This repository is Gonzalo Marsilli's fork of the original [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess) project by Wayne Bellows. The fork preserves the original MIT-licensed AVD health-checker foundation and adds fork-specific updates, including 2026 AVD readiness checks, Azure Cloud Shell path handling, Virtex-inspired report styling, and fork branding.
+
 ## Why this exists
 
 There is no free, open-source, automated health checker for AVD. Microsoft's Well-Architected Framework for AVD is thorough documentation, but operationalising it means either paying for a commercial tool, running a manual review, or doing nothing. AVD-Assess turns the guidance into a five-minute script that produces a shareable report — covering all five WAF pillars and every finding linked to a specific Microsoft Learn article.
@@ -39,7 +44,7 @@ Every finding names the affected resources, explains the fix in concrete terms, 
 Install-Module Az.Accounts, Az.DesktopVirtualization, Az.Compute, Az.Monitor, Az.Resources, Az.Network, Az.Storage, Az.Security -Scope CurrentUser
 
 # Clone the repo
-git clone https://github.com/waynebellows/AVD-Assess.git
+git clone https://github.com/marsillig/AVD-Assess.git
 cd AVD-Assess
 
 # Run against your current Azure context
@@ -57,7 +62,7 @@ AVD-Assess works in [Azure Cloud Shell](https://shell.azure.com) (PowerShell mod
 Install-Module Az.DesktopVirtualization, Az.Security -Scope CurrentUser -Force
 
 # 2. Download the script into your persistent Cloud Drive
-curl -o ~/clouddrive/AVD-Assess.ps1 https://raw.githubusercontent.com/waynebellows/AVD-Assess/main/AVD-Assess.ps1
+curl -o ~/clouddrive/AVD-Assess.ps1 https://raw.githubusercontent.com/marsillig/AVD-Assess/main/AVD-Assess.ps1
 
 # 3. Run it against your current Cloud Shell context
 ~/clouddrive/AVD-Assess.ps1 -UseExistingConnection -OutputPath ~/clouddrive/avd-assess.html
@@ -174,7 +179,7 @@ Two presentation rules keep partially evaluated results honest:
 
 ## Contributing
 
-Bug reports, new checks, and report design improvements are all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the data model and style guidance.
+Bug reports, new checks, and report design improvements for this fork are welcome via [marsillig/AVD-Assess](https://github.com/marsillig/AVD-Assess). See [CONTRIBUTING.md](CONTRIBUTING.md) for the data model and style guidance. For the upstream project, refer to [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
 
 ## License
 
@@ -182,4 +187,4 @@ Bug reports, new checks, and report design improvements are all welcome. See [CO
 
 ---
 
-Built by [Wayne Bellows](https://modern-euc.com) · Feedback: wayne_bellows@hotmail.com
+Fork maintained at [marsillig/AVD-Assess](https://github.com/marsillig/AVD-Assess). Original project by [Wayne Bellows](https://modern-euc.com): [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess).
