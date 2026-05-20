@@ -51,7 +51,7 @@ cd AVD-Scout
 ./AVD-Scout.ps1 -OpenReport
 ```
 
-The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 29 checks, and writes `AVD-Scout-Report-<timestamp>.html` to the current directory.
+The script signs you in (unless `-UseExistingConnection` is used), collects AVD data, runs all 29 checks, and writes `AVD-Scout-Report-yyyy-MM-dd_HH-mm-ss.html` to the current directory.
 
 ## Running from Azure Cloud Shell
 
@@ -81,9 +81,9 @@ Then use **Manage files &rarr; Download** in the Cloud Shell toolbar to grab `av
 |---|---|---|
 | `-SubscriptionId` | Azure subscription ID to assess. Falls back to the current Az context. | `00000000-0000-0000-0000-000000000000` |
 | `-TenantId` | Azure tenant ID. Falls back to the current Az context. | `11111111-1111-1111-1111-111111111111` |
-| `-OutputPath` | Path for the report. Defaults to the current directory with a timestamp. In sweep mode this is the output **directory**. | `C:\Reports\avd.html` |
+| `-OutputPath` | Path for the report. Defaults to the current directory with a timestamp. In sweep mode this is the output **directory**. | `C:\Reports\avd-scout.html` |
 | `-OutputFormat` | `HTML` (default), `JSON`, or `Both`. JSON is a structured, machine-readable document for trend tracking, CI/CD gates, or dashboards. | `Both` |
-| `-CompareTo` | Path to a JSON report from a previous run. Annotates every score (overall, per-category, per-check) with its movement since that run, flags new checks, and lists checks no longer assessed. | `.\AVD-Scout-Report-20260401-090000.json` |
+| `-CompareTo` | Path to a JSON report from a previous run. Annotates every score (overall, per-category, per-check) with its movement since that run, flags new checks, and lists checks no longer assessed. | `.\AVD-Scout-Report-2026-04-01_09-00-00.json` |
 | `-AllAccessibleSubscriptions` | Sweep every enabled subscription the signed-in identity can see. Writes one report pair per subscription plus an `index.html` roll-up. | *switch* |
 | `-HostPoolName` | Scope the assessment to a single host pool (requires `-ResourceGroupName`). | `hp-prod-pooled-01` |
 | `-ResourceGroupName` | Scope the assessment to a specific resource group. | `rg-avd-prod` |

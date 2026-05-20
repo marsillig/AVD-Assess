@@ -17,7 +17,7 @@
 
 .PARAMETER OutputPath
     Where to save the HTML report. Defaults to the current directory with a
-    timestamped filename: AVD-Scout-Report-yyyyMMdd-HHmmss.html
+    timestamped filename: AVD-Scout-Report-yyyy-MM-dd_HH-mm-ss.html
 
 .PARAMETER HostPoolName
     Optional: scope the assessment to a single host pool by name.
@@ -96,7 +96,7 @@
     subscription and an index.html roll-up under .\AVD-Scout-Sweep-<stamp>.
 
 .EXAMPLE
-    .\AVD-Scout.ps1 -OutputFormat Both -CompareTo .\AVD-Scout-Report-20260401-090000.json
+    .\AVD-Scout.ps1 -OutputFormat Both -CompareTo .\AVD-Scout-Report-2026-04-01_09-00-00.json
     Assess the environment and show how every score has moved since the
     1 April baseline, in both the HTML and JSON reports.
 
@@ -3545,7 +3545,7 @@ function Invoke-SubscriptionSweep {
     if ($subs.Count -eq 0) { throw 'No enabled subscriptions are visible to this identity.' }
     Write-Host ('  Subscriptions: {0} enabled' -f $subs.Count) -ForegroundColor Gray
 
-    $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+    $stamp = (Get-Date).ToString('yyyy-MM-dd_HH-mm-ss')
     if ($OutputPath) {
         $sweepDir = Resolve-OutputPath -Path $OutputPath -PathType Directory
     } else {
@@ -3696,7 +3696,7 @@ function Invoke-Main {
     Write-ScoreSummaryConsole
 
     if (-not $OutputPath) {
-        $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+        $stamp = (Get-Date).ToString('yyyy-MM-dd_HH-mm-ss')
         $OutputPath = Join-Path -Path (Get-Location).Path -ChildPath "AVD-Scout-Report-$stamp.html"
     }
 
