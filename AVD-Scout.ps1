@@ -111,7 +111,7 @@
 
 .NOTES
     Author   : Wayne Bellows (wayne_bellows@hotmail.com)
-    Website  : https://modern-euc.com
+    Website  : https://virtex.cloud
     Project  : https://github.com/marsillig/AVD-Scout
     License  : MIT
     Version  : 2.0.0
@@ -150,7 +150,7 @@ $script:JsonSchemaVersion = '1.1'   # Bump major on breaking changes, minor on a
                                     # incompatible *major* versions, so a 1.0 baseline still
                                     # diffs cleanly against this 1.1 build.
 $script:ProjectUrl  = 'https://github.com/marsillig/AVD-Scout'
-$script:WebsiteUrl  = 'https://modern-euc.com'
+$script:WebsiteUrl  = 'https://virtex.cloud'
 $script:RequiredModules = @(
     'Az.Accounts',
     'Az.DesktopVirtualization',
@@ -3199,7 +3199,7 @@ $removedHtml
 
   <footer>
     AVD-Scout v$script:ToolVersion &middot;
-    <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
+    <a href="$script:WebsiteUrl" target="_blank" rel="noopener">https://virtex.cloud</a> &middot;
     <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Scout</a>
   </footer>
 </div>
@@ -3461,7 +3461,7 @@ $sectionSkipped
 
   <footer>
     AVD-Scout v$script:ToolVersion &middot;
-    <a href="$script:WebsiteUrl" target="_blank" rel="noopener">modern-euc.com</a> &middot;
+    <a href="$script:WebsiteUrl" target="_blank" rel="noopener">https://virtex.cloud</a> &middot;
     <a href="$script:ProjectUrl" target="_blank" rel="noopener">github.com/marsillig/AVD-Scout</a>
   </footer>
 </div>
