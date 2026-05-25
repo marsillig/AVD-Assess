@@ -151,7 +151,7 @@ When `-ManagedByNerdio` is used, native Microsoft-aligned scores remain unchange
 
 - This fork: [marsillig/AVD-Scout](https://github.com/marsillig/AVD-Scout)
 - Upstream original: [WayneBellows/AVD-Assess](https://github.com/WayneBellows/AVD-Assess)
-- Branding/site link used in generated reports: [https://virtex.cloud](https://virtex.cloud)
+
 
 ## Contributing
 
